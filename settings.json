@@ -1,0 +1,23 @@
+{
+  "_": [
+    "插件默认设置 —— 插件启用时应用。",
+    "",
+    "── 宿主只认两个键 ──",
+    "从加载器里读出来的形状是 { agent?, subagentStatusLine? }，其余键静默忽略。",
+    "  agent              把插件自带的某个 agent 提为**主线程**，接管系统提示词、",
+    "                     工具限制和模型。这是插件改变宿主默认行为最重的开关。",
+    "                     优先级：product.json default → plugin agent →",
+    "                             settings.json agent → CLI --agent",
+    "  subagentStatusLine 当前仅识别并保留，未接入运行时。",
+    "",
+    "── 为什么 agent 留空 ──",
+    "把主线程换掉意味着**接管用户的系统提示词**。repo-guard 是一道护栏，不是一个人格：",
+    "它该在用户选定的 agent 旁边工作，而不是把人家换掉。装一个护栏插件却发现",
+    "自己的 agent 被替换了，是会让人立刻卸载的那类惊喜。",
+    "",
+    "真要用的话（比如做一个『只读审查』模式），写法是：",
+    "  { \"agent\": \"repo-guard-reviewer\" }",
+    "对应 agents/repo-guard-reviewer.md。那个文件已经写好了，但**没有在这里激活** ——",
+    "让用户自己在 /agents 里选，或者用 `--agent repo-guard-reviewer` 显式指定。"
+  ]
+}

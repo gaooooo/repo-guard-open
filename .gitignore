@@ -1,0 +1,16 @@
+# 依赖只在开发/构建时需要，产物是零依赖单文件
+node_modules/
+
+# 构建中间物
+.tsbuildinfo
+*.tsbuildinfo
+
+# 引擎在被守护的仓库里生成的东西（本仓自己也可能被 init 过）
+.codebuddy/.cache/
+
+# 系统垃圾
+.DS_Store
+
+# 注意：以下这些**要进 git**，别加进来
+#   bin/repo-guard          —— 产物本身就是交付物，用户下载即用、不跑构建
+#   build/baseline/repo-guard —— 逐字节比对的黄金样本，删了 parity 就没基准

@@ -1,0 +1,36 @@
+{
+  "_": [
+    "流程 · 图谱强制查询 —— 部分已实现。生效方式是【硬】。",
+    "",
+    "对应协作全景 L1 里的『新 views → similar，新组件 → hot，改公共层 → impact』",
+    "以及『组件库目录 search』。",
+    "",
+    "── 判定『本轮查过了』 ──",
+    "会话状态记在 $HOME/.repo-guard/state/<sid>.json。",
+    "注意是**按文件记**而不是按布尔值记：查过 A 不能放行 B，",
+    "否则 AI 查任意一次就能改所有公共层文件，守卫形同虚设。",
+    "",
+    "── 为什么三条的成熟度不一样 ──",
+    "  改公共层 → impact   已实现。判据最硬：文件在公共层 且 已存在 且 本轮未查",
+    "  新建页面 → similar  待补充。难点是『什么算新建页面』——",
+    "                      按目录猜（src/views/**）各仓约定不同，误判率高",
+    "  新建组件 → hot      待补充。同上",
+    "  新建组件 → lib      待补充。还要先能识别出组件库（repo-facts.componentLibrary）",
+    "",
+    "后三条的共同问题：**新建文件时拦人的容错空间远小于改已有文件**。",
+    "改已有文件被拦，AI 去查一下就好；新建文件被拦，AI 可能干脆放弃这个方案。",
+    "所以这三条要等有埋点数据支撑再开。"
+  ],
+
+  "_publicLayerImpact": "改公共层已有文件前必须查 impact。这一条**不受开关控制**——它是插件的核心功能。",
+  "publicLayerImpact": { "enabled": true, "_locked": "改这个值没有效果" },
+
+  "_newPageSimilar": "新建页面前必须查 similar。pathPatterns 填『什么路径算新建页面』。",
+  "newPageSimilar": { "enabled": false, "pathPatterns": [] },
+
+  "_newComponentHot": "新建组件前必须查 hot（别重复造轮子）。",
+  "newComponentHot": { "enabled": false, "pathPatterns": [] },
+
+  "_newComponentLibSearch": "新建组件前必须查组件库目录。需要 repo-facts.componentLibrary 有值。",
+  "newComponentLibSearch": { "enabled": false, "pathPatterns": [] }
+}

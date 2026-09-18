@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "repo-guard": {
+      "command": "node",
+      "args": ["${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard", "mcp"]
+    }
+  }
+}

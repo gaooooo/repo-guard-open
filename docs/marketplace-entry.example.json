@@ -1,0 +1,47 @@
+{
+  "_": [
+    "marketplace 条目示例 —— 拿去贴进你自己的 marketplace.json。",
+    "",
+    "── 这个文件本身不是 marketplace ──",
+    "它只是个可复制的片段。真正的市场清单在市场仓库的",
+    "`.codebuddy-plugin/marketplace.json` 里，形状是：",
+    "  { name, owner, plugins: [ {name, source, description}, ... ] }",
+    "",
+    "── source 怎么填 ──",
+    "  './plugins/repo-guard'   市场仓库里的子目录（最常见）",
+    "  'owner/repo'             GitHub 简写",
+    "  'https://.../repo.git'   Git URL",
+    "",
+    "── version 放哪 ──",
+    "`plugin.json` 与 marketplace 条目都能写 version，两处都写时 plugin.json 优先。",
+    "**只在一处写。** 这里不写，让 plugin.json 说话 —— 否则发版时要改两个地方，",
+    "而漏改的那次会让所有人拿到缓存里的旧代码（CodeBuddy 用版本号判断要不要更新）。",
+    "",
+    "── 发布前的检查清单 ──",
+    "  1. npm run check                全绿（typecheck + build + 58 条钩子 + 84 条 parity）",
+    "  2. codebuddy plugin validate .  清单与 frontmatter 语法",
+    "  3. 真机装一次：codebuddy --plugin-dir <路径>",
+    "     脚本全绿但真机不生效已经发生过三次（MCP 死锁、工具名带命名空间、",
+    "     agents/README.md 被当成 agent）。这一步不能省。",
+    "  4. 改了 plugin.json 的 version 吗？不改的话老用户拿到的是缓存"
+  ],
+
+  "example": {
+    "name": "repo-guard",
+    "source": "./plugins/repo-guard",
+    "description": "仓库体检与影响面守卫：改公共层前先确认影响面，写完扫红线与体量。零服务端——图谱从本仓代码现算并缓存本地，规则读仓库文件。"
+  },
+
+  "_install": [
+    "装好之后用户要做的事，按顺序：",
+    "  repo-guard init          先看报告，一个字节都不写",
+    "  （人过一眼推测的公共层）  各仓目录约定不同，猜错要么漏拦要么天天误伤",
+    "  repo-guard init --write  生成 .codebuddy/repo-facts.json",
+    "  重开会话                 插件在会话启动时加载",
+    "",
+    "可选：",
+    "  写 .codebuddy/redlines.json  人写的意图，静态分析推不出来",
+    "  repo-guard audit             配完红线跑一次，验它有没有在守空气",
+    "  repo-guard guard init --write 铺七道门配置骨架（全部默认关）"
+  ]
+}

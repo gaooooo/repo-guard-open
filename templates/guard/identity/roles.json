@@ -1,0 +1,24 @@
+{
+  "_": [
+    "身份 · 岗位交底 —— 待补充，默认空。",
+    "",
+    "对应协作全景的「岗位交底 / 装备」。deerclaw 那边是 agent 私有的 roleKnowledge，",
+    "按 agent 注入。",
+    "",
+    "── 在 CodeBuddy 里的正确落点不是这个文件 ──",
+    "『岗位』在这里等价于 agent 定义，应该写成 agents/*.md：",
+    "  · 系统提示词        → agent 正文",
+    "  · 工具限制          → frontmatter 的 tools / disallowedTools",
+    "  · 模型与推理强度    → model / effort",
+    "已有一个例子：agents/repo-guard-reviewer.md",
+    "",
+    "── 那这个文件还留着干什么 ──",
+    "留一个位置给『按技术栈分流的交底』：同一个 agent 改前端和改 Go 需要知道的",
+    "东西不一样，而这个差异**不值得拆成两个 agent**。",
+    "现在这件事由 skills/backend-go 与 skills/frontend-react 承担（生效方式是【拉】），",
+    "所以这份配置暂时没有必要。",
+    "",
+    "如果将来要做【推】的版本（不等 AI 自己判断要不要加载），再填这里。"
+  ],
+  "roles": {}
+}

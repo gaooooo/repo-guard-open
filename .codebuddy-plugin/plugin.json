@@ -1,0 +1,60 @@
+{
+  "_": [
+    "插件清单。字段按『宿主真的会读』分成三类，见下方各 _ 注释。",
+    "",
+    "── 宿主实际支持的组件只有 8 类 ──",
+    "从 CodeBuddy 的插件加载器里读出来的返回形状是：",
+    "  agents / commands / skills / hooks / mcpServers / lspServers / outputStyles",
+    "  / settings{ agent, subagentStatusLine }",
+    "**没有 rules**。所以插件无法下发 .codebuddy/rules/ —— 想下发常驻规则只能走",
+    "SessionStart 注入，或者由 `repo-guard init --write` 生成规则文件让用户自己提交。",
+    "（内部市场的 my-demo-plugin 里有个 rules/additional.md，那是无效的。）",
+    "",
+    "── 组件路径字段一律省略 ──",
+    "commands / agents / skills / outputStyles 不写时走默认目录；写了就是**替换**默认目录。",
+    "我们的目录就是默认位置，写了只会多一处要同步维护的地方。",
+    "hooks 是例外：它默认只读 hooks/hooks.json，语义清晰，也不用写。"
+  ],
+
+  "name": "repo-guard",
+  "version": "0.2.0",
+  "description": "仓库体检与影响面守卫：改公共层前先确认影响面，写完扫红线与体量。零服务端——图谱从本仓代码现算并缓存本地，规则读仓库文件。",
+  "author": { "name": "repo-guard" },
+  "license": "MIT",
+  "keywords": ["code-graph", "impact-analysis", "guardrails", "lint", "quality-gate"],
+
+  "_defaultEnabled": "缺省 true。装完即生效是这个插件的意图 —— 它在未配置时全放行，开着没有代价。",
+
+  "_userConfig": [
+    "待补充。启用插件时提示用户填的值，可在 hooks / MCP / LSP 配置里用 ${user_config.KEY} 替换，",
+    "并以 CODEBUDDY_PLUGIN_OPTION_<KEY> 导出到子进程。",
+    "",
+    "为什么现在是空的：这个插件的配置**都应该进用户的 git**（公共层清单、红线意图），",
+    "而 userConfig 存在 settings.json / 系统钥匙串里，团队之间不共享。",
+    "把红线放 userConfig 等于每个人一份，那就失去了『红线是团队共识』的意义。",
+    "",
+    "将来可能用到的场景：企业内部自建组件库的包名（非敏感、且确实是个人机器差异）。",
+    "示例：",
+    "  \"userConfig\": {",
+    "    \"component_library\": { \"description\": \"内部 UI 组件库包名\", \"sensitive\": false }",
+    "  }"
+  ],
+
+  "_channels": [
+    "待补充（大概率永久留空）。channels 让插件向对话注入外部消息，必须绑定到插件自己的一个 MCP server。",
+    "repo-guard 是同步工具：人问、它答。没有『外部有消息要推进来』的场景。",
+    "列在这里是为了标明：知道这个控制点存在，有意不用。"
+  ],
+
+  "_dependencies": [
+    "待补充。可声明依赖的其他插件（支持 semver 与跨 marketplace 授权）。",
+    "repo-guard 的引擎已经打包进 bin/，零外部依赖，不需要。"
+  ],
+
+  "_experimental": [
+    "Claude 标准字段，CodeBuddy 当前只识别、不加载到运行时：",
+    "  experimental.themes   → themes/",
+    "  experimental.monitors → monitors/monitors.json",
+    "见 themes/README.md 与 monitors/README.md。"
+  ]
+}

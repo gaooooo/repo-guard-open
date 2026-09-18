@@ -1,0 +1,31 @@
+{
+  "_": [
+    "流程 · AI 审查（L5 的一部分）—— 待补充，默认关。",
+    "",
+    "对应 deerclaw 的 guard_config.reviewAgent：",
+    "  enabled=false, minRiskLevel='medium', blockOnRequestChanges=false",
+    "",
+    "── 在 CodeBuddy 里只有一条实现路径 ──",
+    "`hooks/hooks.json` 里的 `type: agent` —— 起一个带工具的 subagent 做验证。",
+    "其他路子都堵死了：",
+    "  · 插件根 settings.json 只认 agent / subagentStatusLine 两个键",
+    "  · 插件 agent 的 frontmatter 不支持 hooks / mcpServers / permissionMode",
+    "  · Skill frontmatter 里的 hooks 受 allowUntrustedFrontmatterHooks 闸门，默认被拒",
+    "",
+    "── 为什么默认关 ──",
+    "每次 Stop 都起一个 subagent 跑审查，成本和延迟都很实在。而且它与人的 review",
+    "重叠：真正要卡的是开 MR 那一刻，不是每一轮对话结束。",
+    "",
+    "更合适的用法是手动触发：`agents/repo-guard-reviewer.md` 已经写好，",
+    "用 `--agent repo-guard-reviewer` 或在 /agents 里选，在开 MR 前跑一遍。",
+    "",
+    "── blockOnRequestChanges 的坑 ──",
+    "审查不通过就拦交付，听起来合理，但审查是模型做的 —— 它会误判。",
+    "deerclaw 那边默认 false，且每 run 最多触发 2 次。这里也默认 false。"
+  ],
+  "enabled": false,
+  "minRiskLevel": "medium",
+  "blockOnRequestChanges": false,
+  "_agent": "用哪个 agent 做审查。留空则用 repo-guard-reviewer。",
+  "agent": ""
+}
