@@ -456,7 +456,8 @@ CODEBUDDY_CODE_SUBAGENT_MODEL > 本次调用入参 > 项目 subagents.agents.<na
 | 默认模式 | `permissions.defaultMode` | 会话初始权限模式 | U/L；⚠️ 项目级设 `auto` 会被忽略 |
 | 模式禁用 | `permissions.disableBypassPermissionsMode`、`disableAutoMode` | 禁止使用高危模式 | U/E |
 | 子代理权限 | `permissions.subagentPermissionMode`、`--subagent-permission-mode`、`CODEBUDDY_SUBAGENT_PERMISSION_MODE` | 统一收紧子代理 | U/C |
-| 权限模式 | `default` / `acceptEdits` / `auto` / `dontAsk` / `plan` / `bypassPermissions`；`--permission-mode`、`Shift+Tab` 轮换 | 全局审批策略；`dontAsk` 适合 CI 白名单 | **C** + U |
+| 权限模式（用户可切） | `default` / `acceptEdits` / `auto` / `dontAsk` / `plan` / `bypassPermissions` / **`delegate`**；`--permission-mode`、`Shift+Tab` 轮换 | 全局审批策略；`dontAsk` 适合 CI 白名单 | **C** + U |
+| 权限模式（程序化，不在 Shift+Tab 循环） | `fullAccess`（IDE 协议传入，真正 full pass 含危险命令）、`work`（IDE 传入：Read 直接放行不查信任目录、Edit 一律询问、Bash 仅安全命令放行） | 由 IDE / 宿主客户端决定 | X（CLI 侧不可选） |
 | Bash 沙箱 | `sandbox.enabled`、`autoAllowBashIfSandboxed`、`excludedCommands`、`allowUnsandboxedCommands`、`enableWeakerNestedSandbox`、`sandbox.network.{allowUnixSockets,allowLocalBinding,httpProxyPort,socksProxyPort}` | 命令执行与网络出口边界 | U/J |
 | auto 模式分类器规则 | `autoMode.{environment,allow,soft_deny,hard_deny}`（可用 `$defaults` 继承） | 语义化放行/拒绝边界 | U/L/C；**明确不从插件与项目共享配置读取** |
 | 目录信任 | `trustedDirectories`、`trustAll` | 是否信任工作区 | U |
@@ -464,6 +465,14 @@ CODEBUDDY_CODE_SUBAGENT_MODEL > 本次调用入参 > 项目 subagents.agents.<na
 | 轮次上限 | `--max-turns`、`CODEBUDDY_CODE_MAX_TURNS`(默认 500)；agent frontmatter `maxTurns` | 防失控循环 | C + **P**(子代理) |
 | MCP 隔离 | `--mcp-config`、`--strict-mcp-config`（忽略插件/项目/用户 MCP） | CI 内只跑指定 MCP | **C** |
 | 设置源裁剪 | `--setting-sources user,project,local`、`--settings '{...}'` | 忽略仓库配置、注入一次性配置 | **C** |
+
+> ⚠️ **别把 `delegate` 当成"委托他人审批"**：它是**多代理协调模式**——只放行协调类工具（`Agent` / `TaskCreate` / `SendMessage` / 团队管理），**屏蔽实现类工具**，让主代理只做拆派、把执行交给子代理。`codebuddy daemon start` 默认就跑这个模式（可用 `--permission-mode` 覆盖）。真正的"委托他人审批"见 §13.3。
+>
+> 实现上是一张**工具白名单**，命中之外一律拒绝（`permissionMode === Delegate && !allowSet.has(tool)` → deny）。白名单共 8 个：`Agent`、`TaskStop`、`SendMessage`、`AskUserQuestion`、`StructuredOutput`、`Skill`、`WeChatReply`、`WeComReply`。
+> 注意 **`Read` / `Write` / `Edit` / `Bash` / `Grep` / `Glob` 全都不在其中** —— 这个模式下主代理连读文件都做不了，只能派活。
+> daemon 的默认配置字面量：`{ port: 9527, host: "127.0.0.1", permissionMode: "delegate" }`。
+>
+> 另外 `plan` 模式本身不定义边界，它**委托给"进入 plan 前"的那个模式**（默认 `default`），只额外允许写入会话计划文件。
 
 > **插件开发者注意**：插件根 `settings.json` 当前**运行时只应用 `agent` 键**（把插件自带的某个 agent 激活为主线程 Agent，从而改写系统提示、工具限制与模型）；`subagentStatusLine` 仅识别保留，未知键静默忽略。因此想通过插件"改权限"是行不通的，只能通过 `PreToolUse` hook 返回 `deny`/`ask` 来实现等效拦截。
 > 同样出于安全，**插件 agent 不支持 `hooks`、`mcpServers`、`permissionMode` 三个 frontmatter 字段**。
@@ -529,8 +538,13 @@ CODEBUDDY_CODE_SUBAGENT_MODEL > 本次调用入参 > 项目 subagents.agents.<na
 | Bash 边界 | `BASH_DEFAULT_TIMEOUT_MS`(120000)、`BASH_MAX_TIMEOUT_MS`(600000)、`BASH_MAX_OUTPUT_LENGTH`(30000)、`CODEBUDDY_BASH_AUTO_BACKGROUND_DISABLED` |
 | 轮次/模型 | `CODEBUDDY_CODE_MAX_TURNS`(500)、`CODEBUDDY_MODEL`、`CODEBUDDY_SMALL_FAST_MODEL`、`CODEBUDDY_BIG_SLOW_MODEL`、`CODEBUDDY_CODE_SUBAGENT_MODEL`、`MAX_THINKING_TOKENS` |
 | MCP | `MCP_TIMEOUT`、`MCP_TOOL_TIMEOUT`、`MAX_MCP_OUTPUT_TOKENS`(20000) |
-| 沙箱/Shell | `CODEBUDDY_IS_SANDBOX`、`CODEBUDDY_CODE_SHELL`、`CODEBUDDY_CODE_GIT_BASH_PATH` |
+| 沙箱/Shell | `CODEBUDDY_IS_SANDBOX`、`CODEBUDDY_CODE_SHELL`、`CODEBUDDY_CODE_GIT_BASH_PATH`、`CODEBUDDY_SKIP_GIT_BASH_CHECK` |
+| **审计/可观测** | `CODEBUDDY_CODE_SHELL_PREFIX`（**包装所有 shell 命令的命令前缀，文档明示可用于日志或审计**）、`CODEBUDDY_CODE_ENABLE_TELEMETRY=1`、`OTEL_EXPORTER_OTLP_ENDPOINT`、`OTEL_EXPORTER_OTLP_HEADERS`、`OTEL_TRACES_EXPORTER`、`OTEL_SERVICE_NAME`、`OTEL_RESOURCE_ATTRIBUTES`、`OTEL_LOG_USER_PROMPTS`、`OTEL_LOG_TOOL_DETAILS`、`OTEL_LOG_TOOL_CONTENT` |
+| 权限 | `CODEBUDDY_SUBAGENT_PERMISSION_MODE` |
+| 审批渠道 | `CODEBUDDY_WECOM_BOT_ID`、`CODEBUDDY_WECOM_BOT_SECRET`、`CODEBUDDY_WECOM_BOT_WS_URL`（私有化） |
 | 调试 | `CODEBUDDY_DEBUG=1`（可见 `[ScopedHookRegistry] registered ...`） |
+
+> OTel span 结构：根 span `codebuddy_code.interaction`（用户 prompt）、子 span `codebuddy_code.tool`（工具调用，属性含 `tool_name`、`tool.call_id`、`tool_input`，需 `OTEL_LOG_TOOL_DETAILS=1`）。⚠️ **权限决策是否作为 span 属性上报，文档未提及**（见 §13.4）。
 
 > 设置里的 `env` 键也可为会话统一注入环境变量（J/L/U 可配）。
 
