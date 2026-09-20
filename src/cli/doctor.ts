@@ -174,8 +174,31 @@ function checkDeadItems(snap: StandardsSnapshot): Finding[] {
     const eff = effectiveSeverity(item, snap.switchboard.maxSeverity).severity;
     const channels = effectiveChannels(item, eff);
 
-    // ① 一个通道都不通 = 真僵尸，配置能修 → error
     if (!channels.length) {
+      // ①-a 被 maxSeverity 压制导致通道消失。**不是配置写错，改 timing 也没用** ——
+      //     protect_symbol / require_tool 的判定入口都要求实际强度为 block
+      //     （compileBlockRules 与 judgeRequireTool 各自的 sev 检查），
+      //     一旦被压到 remind，它们不是"降级成提醒"，而是整个不参与判定。
+      //     而 `standards list` 仍会显示 [提醒]，看起来像在工作 —— 这才是真正要说的事。
+      //     按本文件的分级原则：改不动的东西不能报 error。
+      const blockOnly =
+        item.severity === 'block' &&
+        (item.check.kind === 'protect_symbol' || item.check.kind === 'require_tool');
+      if (blockOnly && eff !== 'block') {
+        out.push({
+          level: 'warn',
+          id: item.id,
+          message:
+            `声明 block + ${item.check.kind}，但被 maxSeverity=${snap.switchboard.maxSeverity} 压到 ${eff} ——` +
+            `${item.check.kind} 的判定入口只在 block 级存在，所以这条**不是降级成提醒，而是完全不参与判定**。` +
+            `\n      （\`standards list\` 会显示成 [提醒]，那是强度展示，不代表它在做事）` +
+            `\n      来自 ${short(snap.origin.get(item.id))}` +
+            '\n      要它真的生效：把 standards.json 的 maxSeverity 提到 block，并确认这条的 paths 与 confirmed',
+        });
+        continue;
+      }
+
+      // ①-b 判据与时机的组合本身就不通 = 真僵尸，配置能修 → error
       out.push({
         level: 'error',
         id: item.id,
