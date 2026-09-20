@@ -1,0 +1,197 @@
+{
+  "_": [
+    "消息队列规范 —— 和数据库同类：跨进程，单仓图算不出另一端。",
+    "",
+    "── 这一端插件能做的最少 ──",
+    "生产者和消费者通常在两个仓库里。插件看得见本仓那一半，看不见另一半，",
+    "所以『同步发布』这件事只能注入提醒，硬落点在 CI 的契约 diff 与人的 review。",
+    "",
+    "── 唯一能硬拦的是关键字段 ──",
+    "走红线 protects：把消息体里不能动的字段名写进 .codebuddy/redlines.json。"
+  ],
+  "stack": "message-queue",
+  "items": [
+    {
+      "id": "MQ-SCHEMA-001",
+      "title": "Topic 与消息体只增可选字段",
+      "body": "Topic 名与消息体只允许新增**可选**字段。不许改字段类型、不许改必填性、不许复用已有字段承载新含义。需要不兼容变更时新建 Topic 或加版本号，不要原地改。",
+      "why": "消息队列里可能还积压着旧格式的消息，改了解析结构之后那些消息全部处理失败。",
+      "paths": [
+        "internal/mq/**",
+        "internal/message/**",
+        "internal/event/**",
+        "internal/kafka/**",
+        "internal/pubsub/**",
+        "**/producer/**",
+        "**/*.proto"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "pre_write"
+      ],
+      "severity": "ask",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "不兼容变更要新建 Topic 或加版本号，并确认积压消息的处理方案。",
+      "tags": [
+        "mq",
+        "topic",
+        "消息",
+        "消息体",
+        "字段",
+        "kafka"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "MQ-SCHEMA-002",
+      "title": "生产者与消费者必须同步发布",
+      "body": "改消息结构时，生产者与消费者**必须同步发布**。只改一端等于线上消息解析失败。发布顺序要想清楚：加字段先发消费者，删字段先发生产者。另一端在别的仓库时，本次改动必须在 MR 里写清依赖关系。",
+      "why": "插件只看得见本仓这一半 —— 另一端没人提醒你，而线上失败是静默的（消息进死信队列）。",
+      "paths": [
+        "internal/mq/**",
+        "internal/message/**",
+        "internal/event/**",
+        "internal/kafka/**",
+        "internal/pubsub/**",
+        "**/producer/**"
+      ],
+      "timing": [
+        "session_start",
+        "stop"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "ci",
+        "human"
+      ],
+      "hint": "在 MR 描述里写清：对端仓库是哪个、谁负责、发布顺序是什么。",
+      "tags": [
+        "mq",
+        "生产者",
+        "消费者",
+        "发布",
+        "同步"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "MQ-RL-001",
+      "title": "关键字段叠红线保护",
+      "body": "消息体里的关键字段（业务唯一键、幂等键、路由键、状态字段）叠红线保护，改动一律停下问人。『这个字段没人用』的判断在跨仓场景下不成立。",
+      "why": "路由键和幂等键的改动会让消息投错分区、或让幂等失效造成重复处理 —— 两者都不会立即报错。",
+      "paths": [
+        "internal/mq/**",
+        "internal/message/**",
+        "internal/event/**",
+        "internal/kafka/**",
+        "internal/pubsub/**",
+        "**/producer/**"
+      ],
+      "timing": [
+        "session_start",
+        "pre_write"
+      ],
+      "severity": "block",
+      "check": {
+        "kind": "protect_symbol",
+        "symbols": []
+      },
+      "landing": [
+        "plugin",
+        "human"
+      ],
+      "hint": "把关键字段名写进 .codebuddy/redlines.json 的 rules[].protects，跑 `repo-guard audit` 确认没有后门路径。",
+      "tags": [
+        "mq",
+        "红线",
+        "字段",
+        "幂等键",
+        "路由键"
+      ],
+      "enabled": false,
+      "confirmed": false,
+      "_why_disabled": "symbols 必须填本仓真实的关键字段名。空 symbols 的 block 是守空气。"
+    },
+    {
+      "id": "MQ-SEM-001",
+      "title": "消费语义：幂等、重投、顺序三件事必须明确",
+      "body": "写消费者之前先明确三件事：这条消息重复投递会怎样（幂等）、处理失败怎么重投与退避、是否依赖消息顺序。**默认假设是『会重复、会乱序』** —— 不要假设消息只来一次。",
+      "why": "消息中间件的投递保证通常是 at-least-once，重复是常态而不是异常。",
+      "paths": [
+        "internal/mq/**",
+        "internal/message/**",
+        "internal/event/**",
+        "internal/kafka/**",
+        "internal/pubsub/**",
+        "**/producer/**",
+        "internal/mq/**",
+        "internal/consumer/**",
+        "internal/subscriber/**",
+        "**/consumer/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "human"
+      ],
+      "tags": [
+        "mq",
+        "幂等",
+        "重投",
+        "顺序",
+        "消费",
+        "consumer"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "MQ-HIST-001",
+      "title": "多余的消费分支往往是事故留下的",
+      "body": "消费者里看起来多余的分支（处理某个奇怪字段值、兼容某个旧格式、跳过某类消息）**往往是某次线上事故留下的**。默认不动，要删先查这个分支是什么时候加的、为什么加。",
+      "why": "这类分支通常没有注释也没有测试 —— 它是在故障处理的压力下加进去的。删掉之后同样的故障会重演。",
+      "paths": [
+        "internal/mq/**",
+        "internal/consumer/**",
+        "internal/subscriber/**",
+        "**/consumer/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "human"
+      ],
+      "hint": "查 git blame 与当时的提交信息。确实该删就写进禁改清单的反面 —— 在 MR 里说明为什么现在可以删了。",
+      "tags": [
+        "mq",
+        "消费",
+        "分支",
+        "历史代码",
+        "清理"
+      ],
+      "enabled": true
+    }
+  ]
+}

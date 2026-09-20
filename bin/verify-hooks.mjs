@@ -6,8 +6,9 @@
  * 第二件比第一件重要 —— 误伤会让人直接卸载。
  *
  * ── 三个阶段 ──
- *   A 基线（20 条）  没有 guard 配置。这 20 条是**行为契约**，
- *                    自源码版改造前就存在，任何改动都不许动它们
+ *   A 基线（21 条）  没有 guard 配置。其中 20 条是**行为契约**，
+ *                    自源码版改造前就存在，任何改动都不许动它们；
+ *                    G3 是后补的多仓隔离契约（同名文件不许跨仓互相放行）
  *   B 七道门（26 条） 铺上 guard 配置并打开各道门，逐门验拦得对 + 不误伤
  *   C 回归（4 条）    删掉 guard 配置，重跑 A 的代表用例。
  *                    **这一阶段是「空配置零行为变化」的唯一证据** ——
@@ -72,6 +73,26 @@ w('.codebuddy/redlines.json', JSON.stringify({
   ],
 }, null, 2));
 
+// ── 第二个仓库：只给多仓隔离用例（G3）用 ──
+//
+// 会话状态放在 $HOME 而不是仓库里（原因见 runtime/paths.ts），而它的 key 是
+// **仓库相对路径**。两个仓库都有 `src/components/Existing/index.tsx` 时，
+// key 不带仓库维度就会撞：在 A 仓查过影响面，写 B 仓那个同名文件就被放行 ——
+// 守卫方向性地从"多拦"变成"漏拦"。这个方向的失败是不可接受的，所以钉一条用例。
+const REPO2 = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-guard-verify2-'));
+function w2(rel, body) {
+  const f = path.join(REPO2, rel);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, body);
+}
+spawnSync('git', ['init', '-q', '.'], { cwd: REPO2 });
+w2('src/components/Existing/index.tsx', 'export const A2 = 2;\n');
+w2('.codebuddy/repo-facts.json', JSON.stringify({
+  version: 1, analyzer: 'web-frontend',
+  publicLayer: ['src/components/', 'src/utils/'],
+  componentLibrary: null, lineLimit: 500, generatedAt: new Date().toISOString(),
+}, null, 2));
+
 // ───────────── 跑钩子 ─────────────
 
 /**
@@ -125,9 +146,10 @@ const add = (id, desc, want, got) => cases.push({ phase, id, desc, want, got });
 
 const S = 'verify-session';
 
-// ══════════════════ 阶段 A · 基线 20 条（无 guard 配置）══════════════════
+// ══════════════════ 阶段 A · 基线 21 条（无 guard 配置）══════════════════
 //
-// 这 20 条是行为契约。它们从源码版改造之前就存在，任何改动都不许动。
+// 其中 20 条是行为契约，它们从源码版改造之前就存在，任何改动都不许动。
+// G3 是后补的：多仓下同名文件不许跨仓互相放行。
 
 add('P1', '公共层已有文件，未查影响面', 'deny',
   hook('pre-write', { session_id: S, tool_input: { file_path: 'src/components/Existing/index.tsx' } }));
@@ -153,6 +175,8 @@ add('G1', '查过 impact 之后，同一文件放行', 'allow',
   hook('pre-write', { session_id: G, tool_input: { file_path: 'src/components/Existing/index.tsx' } }));
 add('G2', '查过的不能放行另一个文件', 'deny',
   hook('pre-write', { session_id: G, tool_input: { file_path: 'src/components/Existing/big.tsx' } }));
+add('G3', '在另一个仓查过，不放行本仓的同名文件', 'deny',
+  hook('pre-write', { cwd: REPO2, session_id: G, tool_input: { file_path: 'src/components/Existing/index.tsx' } }));
 
 add('B1', 'shell 写公共层 → 提醒但不拦', 'context',
   hook('pre-bash', { session_id: S, tool_input: { command: 'sed -i s/a/b/ src/components/x.tsx' } }));
@@ -467,9 +491,10 @@ if (denied) {
 
 if (!KEEP) {
   fs.rmSync(REPO, { recursive: true, force: true });
+  fs.rmSync(REPO2, { recursive: true, force: true });
   fs.rmSync(HOME, { recursive: true, force: true });
 } else {
-  console.log(`\n临时仓库保留在 ${REPO}\nHOME 保留在 ${HOME}`);
+  console.log(`\n临时仓库保留在 ${REPO}\n第二个仓库保留在 ${REPO2}\nHOME 保留在 ${HOME}`);
 }
 
 console.log('');

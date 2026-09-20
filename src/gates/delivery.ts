@@ -26,9 +26,9 @@ import { record } from '../runtime/metrics.js';
 import {
   claimStopNotice,
   consecutiveFailCount,
+  countSessionFiles,
   evidenceList,
   recordEvidence,
-  sessionTouchedFiles,
   toolCallCount,
 } from '../runtime/session-state.js';
 import type { GuardConfig } from './config.js';
@@ -87,18 +87,20 @@ const QUIET: DeliveryVerdict = { block: false, note: '' };
 export function judgeDelivery(cfg: GuardConfig, repoDir: string): DeliveryVerdict {
   if (!cfg.gates.L5_delivery || !cfg.delivery.enabled) return QUIET;
 
-  const touched = sessionTouchedFiles();
-  if (!touched.length) return QUIET; // 没改东西，无所谓交付
+  // 用跨仓总数：交付瘦身管的是"这一个提交里塞了多少东西"，
+  // 而一次提交可能横跨多个仓（微服务改动常常是这样）
+  const touchedCount = countSessionFiles();
+  if (!touchedCount) return QUIET; // 没改东西，无所谓交付
 
   const notes: string[] = [];
   let block = false;
 
   // ── 交付瘦身 ──
   const budget = cfg.delivery.deliveryBudget;
-  if (budget.enabled && budget.maxDeliveryFiles && touched.length > budget.maxDeliveryFiles) {
+  if (budget.enabled && budget.maxDeliveryFiles && touchedCount > budget.maxDeliveryFiles) {
     if (claimStopNotice('delivery_budget')) {
       notes.push(
-        `本次改动涉及 ${touched.length} 个文件，超过交付上限 ${budget.maxDeliveryFiles}。\n` +
+        `本次改动涉及 ${touchedCount} 个文件，超过交付上限 ${budget.maxDeliveryFiles}。\n` +
           '建议拆成多个提交：一次提交里混进太多无关改动，review 的人只能整体通过或整体打回。',
       );
     }
@@ -110,7 +112,7 @@ export function judgeDelivery(cfg: GuardConfig, repoDir: string): DeliveryVerdic
     const have = evidenceList();
     if (!have.length && claimStopNotice('engineering_check')) {
       notes.push(
-        `改了 ${touched.length} 个文件，但本会话没有出现过 lint / test / build 的执行记录。\n` +
+        `改了 ${touchedCount} 个文件，但本会话没有出现过 lint / test / build 的执行记录。\n` +
           '在提交之前跑一次本仓的检查命令。\n' +
           '（判据是"命令里出现过这些词"，不是"检查通过了"—— 钩子拿不到退出码。' +
           '所以这条提醒不能替代你自己看结果。）',
@@ -132,7 +134,7 @@ export function judgeDelivery(cfg: GuardConfig, repoDir: string): DeliveryVerdic
 export function recordFinalSignal(cfg: GuardConfig, repoDir: string): void {
   if (!cfg.gates.L4_signals) return;
 
-  const touched = sessionTouchedFiles();
+  const touchedCount = countSessionFiles();
   const calls = toolCallCount();
   const fails = consecutiveFailCount();
   const evidence = evidenceList();
@@ -144,7 +146,7 @@ export function recordFinalSignal(cfg: GuardConfig, repoDir: string): void {
       ? 'no_tool_use'
       : fails > 0
         ? 'ended_with_failures'
-        : touched.length === 0
+        : touchedCount === 0
           ? 'read_only'
           : evidence.length
             ? 'wrote_and_verified'
@@ -155,7 +157,7 @@ export function recordFinalSignal(cfg: GuardConfig, repoDir: string): void {
       approximate: true,
       signal,
       toolCalls: calls,
-      touchedFiles: touched.length,
+      touchedFiles: touchedCount,
       consecutiveFailAtEnd: fails,
       evidence,
     }),

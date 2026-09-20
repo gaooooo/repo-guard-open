@@ -1,5 +1,264 @@
 # CHANGELOG
 
+## 未发布
+
+### 配置面重构：支撑「部门模板包」三级分发
+
+分发链从两级变成三级：**插件源码 →(`npm run pack`)→ 部门模板包 → 各项目 `.codebuddy/`**。
+部门拿到的包里没有 `src/`、没有 `node_modules`，引擎是 minify 单文件 ——
+**判据由此确定：部门需要改的一切，必须以 JSON / MD 的形式躺在包里。**
+
+仍然只有两层（全局 `templates/` + 项目 `.codebuddy/`），没有引入第三层。
+
+#### 新增
+
+| 能力 | 说明 |
+|---|---|
+| `npm run pack` | 打模板包。白名单复制 + 三条硬断言（包内绝不含 `package.json`、版本号以 `plugin.json` 为准、冒烟三连含包内 59 条钩子回归） |
+| `repo-guard doctor` | 配置体检。**是 `standards audit` 的超集，复用 `collectAuditFindings` 不重写判定** |
+| `repo-guard redlines init [--write]` | 把 `templates/redlines.json` 拷进项目层。四个 init 至此对称 |
+| standards 分片 | 一个端可以有 `<端>.json` 与 `<端>/*.json` 两种形态并存。`readdir` 结果排序、跳过 `_` 前缀、同层 id 重复报出来 |
+| `override_policy` | `free` / `reason-required` / `locked`。部门限定项目层能改到什么程度 |
+| `templates/CONFIG.md` | 部门解压后的唯一入口，列全两层所有可填点 |
+| `templates/repo-facts.defaults.json` | 部门级行数上限 / 组件库 / 公共层惯例 |
+
+#### 为什么红线走「拷贝」而不是「运行时合并」
+
+试过合并，会打穿两处，而且都**无法用「旧产物有 bug」开脱**：
+
+- `activeRules()` 在未配置仓里变非空 → `hook-session-start-unconfigured` 变红，
+  而那条恰是 `KNOWN_DEVIATIONS['hook-session-start']` 的论证基石
+- `hasRedlines()` 返回 true → `audit-unconfigured` 退出码从 2 变 0
+
+改成 `init` 拷贝之后语义反而更正确：红线本就该进 git、过 review、能被 `audit` 验完整性，
+而验的对象必须是这个仓库实际生效的那一份。`loadRedlines` / `hasRedlines` 一行未动。
+
+同理，`repo-facts` 的部门默认值**只在 `readFacts` 的非 null 分支内补齐字段** ——
+`if (!raw) return null` 是写前守卫的总开关，动它等于把 fail-open 翻成 fail-closed。
+
+#### 修掉 5 个僵尸条目
+
+`doctor` 上线当天就在出厂模板里查出 5 条**永远不会输出**的规范（56 条里的 9%）：
+`L0-EN-004` `CM-CODE-001` `BE-ERR-002` `DB-SCHEMA-002` `DB-AUTH-001`。
+
+根因是 `check.kind` 与 `timing` 的组合不兼容，而这个组合的规则**在代码里而不在文档里**：
+
+- `kind: "none"` 不进 `scanFile` 的候选池（那里只收文件级判据），所以配 `post_write` 是空转
+- `pre_write` / `pre_bash` / `stop` 三个 timing **没有任何代码读取** ——
+  硬拦由 `severity` + `check.kind` 决定，与 timing 无关
+- `require_evidence` 当前没有运行时求值器，声明 `landing: ["plugin"]` 等于插件在假装能管
+
+`doctor` 把这三类分三个级别报：真僵尸报 error，能力缺口报 warn，
+timing 里的装饰值报 info —— **能力缺口不能报成 error**，
+否则部门会去改配置，而改成什么都没用，然后得出"这检查在乱报"的结论。
+
+#### 顺手修掉一个潜伏的越界
+
+`scanFile` 是 `evaluate.ts` 里唯一不自带 `isActionable` 闸门的导出（因为
+`standards check` 必须能在只有全局层时给结论）。但 `post-write` 钩子直接调它，
+意味着**部门往全局层加一条 `remind` + `post_write` + `content_regex` 的规范，
+会让所有没铺项目层的仓库都开始收到提醒** —— 正是「项目层不存在 = 零行为变化」
+要挡住的事。当前没有条目命中所以是潜伏的，闸门已补在调用方。
+
+
+
+规范从"只能 CLI 自查"变成"AI 写代码过程中真的生效"。判定逻辑集中在
+`src/standards/evaluate.ts`，**CLI 与 hook 共用同一份** —— 各写一套的后果是
+"自查说没问题、实际被提醒"，那比没有自查更糟。
+
+| 时机 | Hook | 给什么 |
+|---|---|---|
+| `session_start` / `post_compact` | `SessionStart` / `PostCompact` | 只给 `title` 列表 |
+| `prompt_submit` | `UserPromptSubmit` | 按 `tags` 命中，给**完整正文** |
+| `post_write` | `PostToolUse` | `remind` 级提醒，带行号证据 |
+| `pre_write` | `PreToolUse` | `block` 判定（编译成 `PolicyRule` 交红线引擎 / `require_tool` 查会话状态） |
+
+**注入面只给 title、正文留到命中时才给**：45 条规范的正文远超 1500 token 段预算，
+会话开始时模型需要的是"知道有这些约束"，不是背下每条。正文在两处给 ——
+`UserPromptSubmit` 按 tags 命中时（这一句话确实相关）、被拦/被提醒时（此刻必须知道为什么）。
+
+#### 硬约束：项目层不存在 = 零行为变化
+
+全局层（插件内 `templates/standards/`）**装上插件就存在**，拿它驱动注入意味着
+所有人一升级插件就被迫接受一堆新输出。所以 `evaluate.ts` 的每个入口都先过
+`isActionable()`，而它只认 `projectPresent`。
+
+没铺 `.codebuddy/standards/` 时运行时什么都不做，此时全局层只服务 `standards check`
+这类人主动跑的 CLI。**59 条 verify-hooks 与 76/84 parity 因此全部保持不变。**
+
+#### 两处顺序/归属问题（实现时发现并修掉）
+
+| 问题 | 为什么严重 |
+|---|---|
+| `require_tool` 判定排在公共层守卫之前 | 两者会判同一件事（模板 `CM-LAYER-002` 的 paths 就是公共层），而核心功能那份拒绝文案是真机调优过的 —— 它给出三种工具调法，因为模型按 `impact` 搜工具名会搜不到，然后判定「工具不存在」改用 grep 凑影响面。让 standards 那份较简的文案抢在前面等于丢掉这个调优成果。已改成核心守卫优先，standards 只管它覆盖不到的场景（新建文件的 similar/hot/lib、公共层之外的路径） |
+| 拒绝文案指错配置文件 | `STD-` 前缀的规则来自 `.codebuddy/standards/`，但文案一律写「更新 .codebuddy/redlines.json」。模型照做会改错文件，然后以为改了没生效。已按 id 前缀分流 |
+
+#### standards 的 block 不受 guard 的 L1 总闸控制
+
+它有自己的总闸（`standards.json` 的 `enabled` + `maxSeverity`）。把 `maxSeverity`
+调到 `block` 已经是极其明确的表态，再要求同时打开 guard 的 `L1_admission` 就成了
+两套开关，人会困惑「我开了为什么不拦」。配置集中优先。
+
+实现上 `judgeRedline` 新增 `extraRules` 参数走独立闸门：L1 关着时快照里的手写红线
+不判，但 standards 的 block 仍判。
+
+#### 又一处模板缺陷（真机发现）
+
+后端与数据库模板里**没有一条** `timing` 含 `prompt_submit` —— 于是在后端仓问
+「帮我改个接口字段名」时按任务注入完全没有输出。而"改字段"恰恰是最需要在动手前
+拿到完整正文的操作。已给 15 条高价值条目补上（`BE-API-*` / `DB-SCHEMA-001` /
+`DB-MIG-001` / `DB-RL-001` / `CM-FREEZE-001` / `MQ-*` 等）。
+
+顺带去掉 `CM-LAYER-002` 的 `session_start` 时机：公共层那段正文已由核心功能的
+`guardSegment` 注入，再注一遍是重复，而重复会稀释每条约束的分量。
+
+#### 新增埋点
+
+`standards_hit`（remind 级命中）/ `standards_deny`（block 级拦截），
+供 `repo-guard governance` 回答"这些规范在做有用功还是在骚扰人"。
+
+### 新增：五端研发规范标准模板（`templates/standards/`）
+
+把研发规范做成**集中、两层、可修改**的插件模板。六个文件对应六个端（L0 跨端契约 /
+全端共用 / 前端 Web·React / 后端 Go·Node·Java / 数据库 / 消息队列），共 45 条条目。
+
+**两层而不是三层**：全局层在插件里（改它 = 定制部门模板，跟着版本走），项目层在
+`<repo>/.codebuddy/standards/`（进 git）。合并 key 是条目 `id`，**字段级浅合并** ——
+项目层只写要改的字段，其余继承全局层。这样团队不必整份抄一遍（抄了下次升级就拿不到新条目）。
+
+**放宽必须留痕**：项目层降低强度或关闭条目时必须写 `override_reason`，否则该 override
+**被忽略**并在 `standards audit` 里报 warn。选"允许放宽但留痕"而不是"禁止放宽"是因为
+这是单机插件，没有企业策略层能兜住硬禁止 —— 硬禁止的唯一后果是人把整个目录删掉，
+那时连留痕都没了。收紧不需要理由。
+
+**默认零拦截**：`maxSeverity` 默认 `remind`，所有 ask/block 自动降级为提醒。
+另有 **block 准入三条件**（`paths` 非空 + `confirmed: true` + 判据属
+`protect_symbol`/`path_only`/`require_tool`），缺一即降级，并在 `standards list` 里
+显式标出降级原因 —— 静默降级会让人以为配了就生效。`content_regex` **永不 block**：
+正则判不出意图，"改断言"和"修正一个写错的断言"在文本层面一模一样。
+
+### 两处方向性错误（设计过程中发现并修掉）
+
+| 问题 | 为什么严重 |
+|---|---|
+| `__PUBLIC_LAYER__` 展开为空时留下空 `paths` | `itemAppliesToPath` 把空 `paths` 解释成**全仓适用**，于是一条只想管公共层的规范在没配公共层时突然适用全仓 —— 方向从"少管"翻成"全管"。改成：展开为空即关闭该条目并留一条告警 |
+| `standards check` 把会话级条目按文件判定 | `none`（只注入）与 `require_evidence`（会话内跑过校验没）不是按文件判定的。按文件报会让每个文件后面跟一串"不编造字段""CI 不绿不许合"，那不是自查结果是噪音，而噪音会让人不看这份输出 |
+| `protect_symbol` 在 `check` 里退化成纯路径命中 | 完整判定要真 diff（before 含、after 不含），只有 `PreToolUse` 拿得到；CLI 没有 diff。但退化成"路径命中即报"意味着 `paths` 覆盖的目录下每个文件都报"这里有受保护字段"——真机验证时 `router/router.go` 也报了 `error_description`，而它根本没提到这个词。改成**文件里确实出现该符号才算命中**并给出行号，语义同时变准：它回答的是"这个文件碰了受保护字段"，不假装能判断"你删了它"|
+
+### 新增命令
+
+| 命令 | 干什么 |
+|---|---|
+| `standards list [--stack <端>]` | 生效清单：哪些端启用、来自哪一层、实际强度、被降级的原因 |
+| `standards check <文件…>` | 规范自查。**人审/硬拦级非零退出**，可挂 CI；提醒级不影响退出码（启发式判据卡流水线会被关掉） |
+| `standards init [--write]` | 铺模板。与 `guard init` 同纪律：默认一个字节不写，已存在的绝不覆盖 |
+| `standards audit` | 规范腐烂体检：空 `symbols` 的守空气、被静默降级的 block、会拦人但没写 `hint`、项目层放宽有没有留理由 |
+
+### 图里的 4 个门禁名没有变成 4 道门
+
+外部规范图里的 `modify_api` / `modify_database` / `modify_mq_schema` /
+`modify_component` 与 `verification.buildCmd` / `testCoverageNote` /
+`publicLayerPatterns` / `pageLayerPatterns` 是**另一套系统的字段名**，不引入，
+而是落成 standards 条目复用现有机制（详见 `docs/CONTROL-POINTS.md` §14.5）。
+其中 `modify_database` 对应的 `DB-*` 条目**刻意不强制查图谱** —— 库字段的
+"影响面 0"是假信号，SQL、离线任务、其它服务全在图谱之外，一个不准的门禁比没有门禁更糟。
+
+### 新增文档
+
+- `docs/STANDARDS.md` —— 五端规范清单。每条给 id / 硬约束原文 / 适用路径 / 强度 /
+  落点主体 / "不要写成"的反例，并明确列出**插件拦不住、必须外委**的那些
+  （循环依赖与行数硬拦 → lint；密钥与覆盖率 → CI；碰生产与 `git commit` → 宿主
+  `permissions.ask`）。不假装能拦是这份清单的底线。
+- `docs/CONTROL-POINTS.md` 新增 §14「研发规范落点索引」—— 规范 `severity` → 控制点 →
+  hook 事件 → 输出字段 → 权限链位置，以及四份配置（`repo-facts` / `redlines` /
+  `guard/` / `standards/`）各管什么。
+
+### 兼容性
+
+`repo-facts.json` / `redlines.json` / `.codebuddy/guard/` **全部保留原路径原字段**，
+一个都不迁移（README 那句"挪位置会破坏现有安装"仍然成立；而且 parity 有 5 条用例
+在逐字节比对 `repo-facts.json` 的文件内容）。standards 只读它们：`publicLayer` 供
+`__PUBLIC_LAYER__` 展开、`analyzer` 供端探测、`redlines.protects` 供 `protect_symbol`。
+
+`npm run check` 全绿：typecheck + build + 59 条 verify-hooks + 76/84 parity
+（8 个已知偏差为既有）。规范未铺设时零行为变化。
+
+### 真机验证（两个生产仓）
+
+在 `saas-web`（React + `@tencent/tea-component`）与 `backend-agent-identity`
+（Go 1.24 + trpc）上跑过 `standards list` / `check`：
+
+- **端探测两仓全对**，且前端仓自动跳过 database / message-queue —— `FE-SKIP-001`
+  想要的效果不用人配就达成了
+- **前端零误报**：抽样命中的 `color: '#0052D9'`、`const p: any`、
+  `<List.Item>时间窗口：…</List.Item>` 逐条核对全是真阳性；用 `t('中文')` 包裹的
+  文案正确不报
+- **后端暴露了模板的真实缺陷**：`paths` 默认写的是 `internal/handler/**`，
+  而这个仓的分层是 `router/ → service/{admin,agent}/ → internal/logic/ → internal/repo/`，
+  于是 `BE-ERR-001` **静默失效**。这正是模板注释里警告过的那种失败 ——
+  验证方式是 `standards audit` 看不出来的，只能靠在真仓上跑一遍 `check`
+- 顺带发现模板里当示例写的 `error_description` 在这个仓是**真红线**
+  （`internal/filter/oauth.go` 的 `AuthError` json tag，OAuth 2.0 标准字段）
+
+一条配置教训（已写进给这两个仓的项目层配置）：`symbols` 不能填通用词。
+填 `["error_description", "error"]` 时 `error` 单独命中 10 处；收窄成
+`["error_description"]` 后精确命中 4 处、零误报。
+
+### 验证逼出的三处模板改动
+
+| 改动 | 原因 |
+|---|---|
+| 后端 / 数据库 / MQ 的 `paths` 改成**多候选并列** | 模板只写 `internal/handler/**`，而真实仓的分层是 `router/ → service/{admin,agent}/ → internal/logic/ → internal/repo/`，于是 `BE-*` 全部静默失效。多写不会误伤（不存在的目录不会命中），漏写则整条规范无声消失 |
+| 前端 `FE-API-001` 的 `paths` 补 `src/api/**` | `src/**/api/**` 里的 `**` 要求中间有段，匹配不到 `src/api/x.ts` —— 而那正是这个仓的布局 |
+| `BE-ERR-001` 从内容正则降为只注入 | 模板里只匹配 `OAuthResponse` 一个词，真实仓 13 处命中**全是合规使用**（OAuth 路由本来就该挂这个壳）。正确判据是「admin 侧标识 + OAuth 壳同行同现」，而「admin 侧」在各仓叫什么模板猜不到 —— 猜错就是纯误报。改成模板只给正文，双条件正则交项目层填，`_note` 里带真实示例 |
+
+第三条是这次验证最值得记的一件事：**判据写不准时，正确的做法是降级为只注入，而不是写一个宽松的正则凑合。**
+宽松正则的产出是 13 条噪音，而噪音会让人关掉整套门禁。
+
+### 项目层配置的真实用法：关掉重复项，而不是再加一堆
+
+两个仓都已有成体系的 `.codebuddy/rules/`（后端的 `mongo-field-naming.md`
+讲 bson tag 三处联动、`verify-before-done.md` 讲本仓零测试包清单；前端的
+「接口层写法规范」「静态可分析性规范」讲怎么写才能被图谱静态提取）。
+
+所以给这两个仓写的项目层配置里，**7 条是关闭**（每条写明 `override_reason`
+指向对应的 rules 文件），其余是把 `paths` / `body` / `hint` 对准本仓 ——
+没有新增任何一条规范。两套规则说同一件事的后果是注入面翻倍，而且措辞不一致时
+模型不知道听谁的。
+
+这也正好把「放宽必须留痕」跑通了：`standards audit` 能列出是谁关的、为什么关、
+该去看哪份文件。
+
+### 修掉的严重问题
+
+| 问题 | 影响 | 怎么发现的 |
+|---|---|---|
+| **会话状态的 key 不带仓库维度** | 状态放在 `$HOME`（不能放仓库里，会污染 `git status`），而 key 是**仓库相对路径**。两个仓都有 `src/index.ts` 时 key 就撞：在 A 仓查过影响面，写 B 仓那个同名文件**直接放行**。守卫方向性地从"多拦"变成"漏拦" | 讨论多仓演进时顺出来的 |
+
+修法：新增 `repoId()`（realpath 归一 + FNV-1a 短 hash，**不引入 `node:crypto`**，
+产物 require 列表是独立性论证的一部分），凡是 key 含路径或含"本仓知识"的状态
+一律走 `scopePrefix(repoDir)`。状态格式版本升到 3，**版本不匹配时整份丢弃** ——
+旧格式没有仓前缀，混着读会让"查过"判定时真时假，那比丢掉状态坏得多（丢掉只是多拦一次）。
+
+会话级计数器（`toolCalls` / `consecutiveFail` / `repeatCount` / `evidence` / `stopNotices`
+与 `countSessionFiles`）**故意不带仓**：它们回答的是"这个 agent 这一轮的行为"，
+按仓拆开会让每个仓各自从 0 数起，L3 循环门与范围预算直接失效。
+函数签名本身就是这份划分的文档 —— 带 `repoDir` 的是仓级，不带的是会话级。
+
+回归用例 **G3**「在另一个仓查过，不放行本仓的同名文件」钉住这条：
+去掉仓前缀，G3 立刻从 deny 变 allow（已实测）。verify-hooks 58 → 59 条。
+
+### 新增文档
+
+- `docs/MULTI-REPO.md` —— 多仓演进。写清当前单仓假设的准确边界（含两个**已经存在**
+  的静默错误：`findRepoRoot` 在 monorepo 子包停住导致图谱范围被截断；多根工作区被当成
+  一个大仓、各子仓的 `redlines.json` 全被忽略）、演进支点「仓由文件决定而非 cwd 决定」、
+  本地与服务端图谱的分工（服务端拿不到未提交改动，是结构性的；而对方仓只需要默认分支，
+  多分支维度因此塌成 1）、以及跨仓契约索引的三级落地。
+  盘点出跨仓能力的第一个必做项是**后端→后端的出向调用识别** ——
+  前端侧 `@api` 边已经产出 `POST /path`、后端侧 `RouteNode` 已经产出 `method + urlPath`，
+  两端 join key 现成，缺的只有 Go / Java / Python 分析器不认自己调了别的服务。
+
 ## 0.2.0 —— 源码版 + 协作全景七道门
 
 ### 这一版最重要的一件事

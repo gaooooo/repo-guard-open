@@ -1,0 +1,458 @@
+{
+  "_": [
+    "后端（Go / Node / Java）规范。",
+    "",
+    "── 对应关系 ──",
+    "后端没有 UI/组件。对应前端『组件库』的是**对外接口契约**；",
+    "对应『调用核对』的是**错误封装和字段红线**。",
+    "",
+    "── 第一波只接 ──",
+    "契约、分层、编码、提交/验证、字段红线、禁改。",
+    "鉴权/幂等/超时第二天再挂 skill，不要第一天塞满常驻注入面 ——",
+    "一份 3000 token 的『重要约束』里没有哪一条是重要的。",
+    "",
+    "── paths 里的路径是示例，必须按本仓改 ──",
+    "这里按 Go 的常见布局写（internal/handler、internal/service）。",
+    "Node / Java 仓请在项目层覆盖 paths。写错 paths 的后果是规范静默失效。"
+  ],
+  "stack": "backend-service",
+  "items": [
+    {
+      "id": "BE-API-001",
+      "title": "对外接口只增可选字段",
+      "body": "对外接口只允许新增**可选**字段。不许改已有字段的类型、不许改必填性、不许改语义。路由与方法名同样不许改。需要破坏性变更时先报告影响面并等确认。",
+      "why": "客户端不会跟着你发版。一个改成必填的字段会让所有未升级的调用方直接失败。",
+      "paths": [
+        "internal/handler/**",
+        "internal/logic/**",
+        "internal/controller/**",
+        "internal/dto/**",
+        "service/**",
+        "router/**",
+        "api/**",
+        "src/controller/**",
+        "src/main/java/**/controller/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "pre_write"
+      ],
+      "severity": "ask",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "跑 impact 看受影响入口；破坏性变更要走契约 diff 并通知对端。",
+      "tags": [
+        "接口",
+        "契约",
+        "api",
+        "字段",
+        "出入参"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "BE-API-002",
+      "title": "已随 SDK 下发的字段一字不改",
+      "body": "已经随 SDK 下发出去的字段名**一个字母都不能改、不能删**（例如 `error_description`）。即使它命名不规范、即使它看起来像拼写错误 —— 那是契约，不是代码风格问题。",
+      "why": "SDK 已经在客户端里跑着了，改字段名等于让所有已发布版本解析失败，而且你不知道有多少个版本还在线。",
+      "paths": [
+        "internal/handler/**",
+        "internal/logic/**",
+        "internal/dto/**",
+        "internal/filter/**",
+        "service/**",
+        "router/**",
+        "api/**",
+        "pkg/sdk/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "pre_write"
+      ],
+      "severity": "block",
+      "check": {
+        "kind": "protect_symbol",
+        "symbols": [
+          "error_description"
+        ]
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "要改先跑 impact 拿受影响入口数，然后找契约维护者确认。确认可改之后**同时更新这条规范的 symbols** —— 不要绕过它。",
+      "tags": [
+        "sdk",
+        "字段",
+        "改名",
+        "契约",
+        "error_description"
+      ],
+      "enabled": false,
+      "confirmed": false,
+      "_why_disabled": "symbols 是示例值。填成本仓真实的受保护字段名、人确认过之后，把 enabled 与 confirmed 一起改成 true。"
+    },
+    {
+      "id": "BE-API-003",
+      "title": "扇出过大先报告，不许直接改",
+      "body": "受影响入口 ≥ 5 时先报告影响面，说明改动方案，等确认后再动手。不许一次性改完所有调用点 —— 那个 diff 没人 review 得了。",
+      "why": "大 diff 的 review 质量趋近于零，而它恰恰是最需要 review 的那种改动。",
+      "paths": [
+        "__PUBLIC_LAYER__"
+      ],
+      "timing": [
+        "session_start",
+        "pre_write"
+      ],
+      "severity": "block",
+      "check": {
+        "kind": "require_tool",
+        "tool": "impact"
+      },
+      "landing": [
+        "plugin"
+      ],
+      "hint": "跑 impact 拿受影响入口数与传播路径，先把方案说清楚。",
+      "tags": [
+        "影响面",
+        "扇出",
+        "重构",
+        "impact"
+      ],
+      "enabled": true,
+      "confirmed": true
+    },
+    {
+      "id": "BE-LAYER-001",
+      "title": "分层单向：handler → service → repository → domain",
+      "body": "依赖只能单向：handler → service → repository → domain。**禁止反向依赖**，service 不许 import handler、domain 不许 import repository。本仓目录别名（如用 `logic/` 代替 `service/`）能不能改名写进岗位交底，**不改跨仓基座**。",
+      "why": "反向依赖通常是为了让某个 case 快速跑通临时加的，加完之后整个分层就失去了意义。",
+      "paths": [
+        "internal/**",
+        "src/**",
+        "cmd/**",
+        "service/**",
+        "router/**",
+        "app/**",
+        "pkg/**"
+      ],
+      "timing": [
+        "session_start",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "lint",
+        "plugin"
+      ],
+      "hint": "硬落点是 import 限制 lint（Go 可用 golangci-lint 的 depguard）。目录改名是独立任务，不要顺手做。",
+      "tags": [
+        "分层",
+        "架构",
+        "handler",
+        "service",
+        "repository",
+        "domain",
+        "目录"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "BE-ERR-001",
+      "title": "错误封装按受众分层",
+      "body": "错误壳按**给谁看**决定，不是按方便决定。对外接口套对外错误结构，内部调用返回原始错误链。admin 侧接口禁止套 OAuth 类响应壳 —— 那是给授权流程用的。",
+      "why": "套错壳的症状是前端拿到一个结构对不上的响应，而报错信息会指向完全无关的地方。",
+      "paths": [
+        "internal/handler/**",
+        "internal/logic/**",
+        "internal/controller/**",
+        "internal/filter/**",
+        "service/**",
+        "router/**",
+        "src/controller/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin"
+      ],
+      "hint": "看同目录其它接口用的是哪个错误壳，照着用。",
+      "tags": [
+        "错误",
+        "封装",
+        "error",
+        "响应",
+        "handler"
+      ],
+      "enabled": true,
+      "_note": [
+        "模板里刻意**不给内容正则** —— 真机验证时踩过：只匹配 `OAuthResponse` 一个词，",
+        "在真实仓里 13 处命中全是合规使用（OAuth 路由本来就该挂这个壳）。",
+        "",
+        "这条的判据必须是**双条件同现**：『admin 侧标识』+『OAuth 壳』在同一行。",
+        "而『admin 侧』在各仓叫什么（admin. / backend. / console. / 某个路由组）模板猜不到，",
+        "猜错就是纯误报，而误报的门会被关掉。所以交项目层填，示例：",
+        "",
+        "  { \"id\": \"BE-ERR-001\",",
+        "    \"paths\": [\"router/**\", \"internal/filter/**\"],",
+        "    \"check\": { \"kind\": \"content_regex\", \"patterns\": [{",
+        "      \"pattern\": \"admin\\\\.[A-Za-z_]+.*OAuthResponse|OAuthResponse.*admin\\\\.[A-Za-z_]+\",",
+        "      \"message\": \"admin 侧路由挂了 OAuth 响应壳 —— 那是给授权流程用的\" }] } }",
+        "",
+        "双条件是压误报的关键，这与红线引擎 L2 的做法一致（受保护标识符 + 破坏性动作同时命中）。"
+      ]
+    },
+    {
+      "id": "BE-ERR-002",
+      "title": "agent 侧禁套错误封装",
+      "body": "agent / 内部任务侧返回原始错误，不要套对外错误封装。套了之后上层拿不到真实错误类型，重试与降级逻辑会判断错。",
+      "why": "复制隔壁 handler 的 wrap 是最常见的来源 —— 它在那里是对的，在这里不是。",
+      "paths": [
+        "agent/**",
+        "internal/agent/**",
+        "internal/job/**",
+        "internal/task/**",
+        "internal/worker/**",
+        "internal/cron/**"
+      ],
+      "timing": [
+        "prompt_submit"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin"
+      ],
+      "tags": [
+        "错误",
+        "agent",
+        "封装",
+        "任务"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "BE-CODE-001",
+      "title": "语言惯例：格式化、错误 wrap、goroutine 必有 ctx",
+      "body": "Go：`gofmt` 过一遍；错误用 `%w` wrap 保住错误链；**每个 goroutine 必须有 ctx 与明确的退出路径**。裸 `go func(){}` 不许出现 —— 它无法被取消，进程退出时也不知道它在干什么。",
+      "why": "泄漏的 goroutine 不会报错，只会让内存慢慢涨，并且在完全无关的时间点表现为超时。",
+      "paths": [
+        "**/*.go"
+      ],
+      "timing": [
+        "session_start",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "content_regex",
+        "patterns": [
+          {
+            "pattern": "go\\s+func\\s*\\(\\s*\\)\\s*\\{",
+            "message": "裸 goroutine：确认它有 ctx 与退出路径。"
+          },
+          {
+            "pattern": "fmt\\.Errorf\\([^)]*%v[^)]*,\\s*err\\s*\\)",
+            "message": "错误 wrap 用 %w 而不是 %v，否则错误链断了、errors.Is 判不出来。"
+          }
+        ]
+      },
+      "landing": [
+        "plugin",
+        "lint"
+      ],
+      "hint": "硬落点是 golangci-lint + go vet。",
+      "tags": [
+        "go",
+        "gofmt",
+        "goroutine",
+        "错误",
+        "wrap",
+        "ctx"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "BE-AUTH-001",
+      "title": "权限条件下推到 WHERE",
+      "body": "数据范围的权限条件必须下推到查询里（WHERE / filter），**禁止查出来再在应用层 `if uid != ...` 过滤**。分页场景下应用层过滤还会导致返回条数不对。",
+      "why": "应用层过滤意味着数据已经被查出来了 —— 任何一个分支漏判就是越权，而且日志里看不出来。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/repository/**",
+        "**/mapper/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "human"
+      ],
+      "hint": "P0 级别的资金/权限改动不许自主提交，必须人确认。",
+      "tags": [
+        "鉴权",
+        "越权",
+        "权限",
+        "uid",
+        "where",
+        "过滤"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "BE-RETRY-001",
+      "title": "超时预算、重试、幂等",
+      "body": "全链路超时要有预算，下游超时必须小于上游。写操作必须幂等，重复提交要能识别（业务唯一键 / 幂等 token）。重试只对幂等操作做，且要有退避。",
+      "why": "没有超时预算的调用链会在下游慢的时候把上游全部拖死。",
+      "timing": [
+        "session_start",
+        "prompt_submit"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "human"
+      ],
+      "hint": "这一条刻意只注入不判定 —— 判据依赖上下文（查询接口不需要幂等），硬拦必然误伤。",
+      "tags": [
+        "超时",
+        "重试",
+        "幂等",
+        "timeout",
+        "retry"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "BE-OBS-001",
+      "title": "结构化日志，不打密钥，字段名稳定",
+      "body": "日志用结构化输出，字段名保持稳定（有人在按字段名做告警和看板）。不打密钥、不打完整的用户敏感信息。慢查询与错误率要有指标，不要出问题时才加日志。",
+      "why": "日志字段名也是契约 —— 改了之后告警会静默失效，而没有人会收到『告警失效』的告警。",
+      "timing": [
+        "session_start",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "lint"
+      ],
+      "tags": [
+        "日志",
+        "可观测",
+        "监控",
+        "指标",
+        "log"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "BE-CONF-001",
+      "title": "运行时配置文件纳入公共层",
+      "body": "运行时配置（如 `etc/trpc_go.yaml`、`config/*.yaml`、环境变量清单）纳入公共层管理，改之前查影响面。『就改个超时时间』也要查 —— 那个值可能是某次线上故障调出来的。",
+      "why": "配置改动不经过编译期检查，错了只有在运行时才知道，而且往往是在流量高峰。",
+      "paths": [
+        "etc/**",
+        "conf/**",
+        "config/**",
+        "configs/**",
+        "**/application*.yml",
+        "**/application*.yaml",
+        "**/*.toml"
+      ],
+      "timing": [
+        "session_start",
+        "pre_write"
+      ],
+      "severity": "block",
+      "check": {
+        "kind": "require_tool",
+        "tool": "impact"
+      },
+      "landing": [
+        "plugin"
+      ],
+      "hint": "跑 impact 看这个配置被哪些地方读；改完在 MR 里写清原值与新值以及为什么。",
+      "tags": [
+        "配置",
+        "yaml",
+        "trpc",
+        "超时",
+        "环境变量"
+      ],
+      "enabled": false,
+      "confirmed": false,
+      "_why_disabled": "paths 是示例。确认本仓真实配置目录、且人点头之后再开 —— 配置文件改动频繁，误伤代价高。"
+    },
+    {
+      "id": "BE-VERIFY-001",
+      "title": "test / build / vet 必须进 CI，build 过不等于字段安全",
+      "body": "`go test` / `go build` / `go vet`（或对应语言的等价命令）必须进 CI。**build 过 ≠ 字段安全** —— 编译器不知道这个字段有外部调用方。覆盖率缺口写进交付说明，不要只说『编译通过了』。",
+      "why": "『编译通过』是最容易被当成验证证据的东西，而它恰恰不覆盖契约与数据正确性。",
+      "timing": [
+        "session_start",
+        "stop"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "require_evidence",
+        "commands": [
+          "go test",
+          "go build",
+          "go vet",
+          "mvn test",
+          "gradle test",
+          "npm test"
+        ]
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "本会话没有检测到校验命令的执行记录。自定义脚本名要加进 guard/process/delivery.json 的 evidencePatterns。",
+      "tags": [
+        "测试",
+        "构建",
+        "验证",
+        "go test",
+        "覆盖率"
+      ],
+      "enabled": true
+    }
+  ]
+}

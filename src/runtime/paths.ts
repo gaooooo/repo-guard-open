@@ -52,6 +52,40 @@ export function findRepoRoot(start: string): string {
   return path.resolve(start);
 }
 
+/**
+ * 仓库的稳定标识。用来给**存在仓库外面**的状态加上仓库维度。
+ *
+ * ── 为什么需要它 ──
+ * 仓库内的配置与缓存靠路径天然隔离（`<repo>/.codebuddy/`），但会话状态放在
+ * `$HOME/.repo-guard/`（原因见本文件顶部），它的 key 是**仓库相对路径**。
+ * 两个仓库都有 `src/index.ts` 时 key 就撞了 —— 查过 A 仓那个会让 B 仓那个直接放行，
+ * 守卫方向性地从"多拦"变成"漏拦"。这是唯一一处不能靠路径隔离的状态。
+ *
+ * ── 为什么带上目录名而不是纯 hash ──
+ * 状态文件是要给人看的（排查"为什么这个文件被拦"时会直接 cat）。
+ * 纯 hash 的 key 谁都读不懂，带上目录名就能一眼认出是哪个仓。
+ *
+ * ── 为什么先 realpath ──
+ * 同一个仓库，hook 进程与 MCP 进程算出的路径可能一个带 `/private` 一个不带
+ *（macOS 的 `/var` 是符号链接）。不归一就会算出两个 id，
+ * 于是「MCP 里查过」和「hook 里判定」又对不上，回到死循环。
+ *
+ * ── 为什么不用 node:crypto ──
+ * 产物的 require 列表是被 DESIGN.md 7.1 钉住的独立性论证的一部分。
+ * 这里只需要"同一路径得同一短串"，FNV-1a 足够，不值得为它扩大依赖面。
+ */
+export function repoId(repoDir: string): string {
+  const real = realpathOrSelf(repoDir);
+  // FNV-1a 32 位。`>>> 0` 保证走无符号，否则 JS 的位运算会给出负数
+  let h = 0x811c9dc5;
+  for (let i = 0; i < real.length; i++) {
+    h = ((h ^ real.charCodeAt(i)) * 0x01000193) >>> 0;
+  }
+  const hash = h.toString(16).padStart(8, '0');
+  const name = path.basename(real).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 24) || 'repo';
+  return `${name}-${hash}`;
+}
+
 /** `<repo>/.codebuddy/<sub>` */
 export function configPath(repoDir: string, ...sub: string[]): string {
   return path.join(repoDir, CONFIG_DIR, ...sub);

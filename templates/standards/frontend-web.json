@@ -1,0 +1,205 @@
+{
+  "_": [
+    "前端（Web / React）规范。",
+    "",
+    "── 真正前端特有的只有四类 ──",
+    "UI · 组件库 · i18n · 调用契约。编码和提交不要再算『前端四件套』——",
+    "那些在 common.json 里，后端也要接，只换命令。",
+    "",
+    "── FE-SKIP-001 是一条元规则，不是规范 ──",
+    "前端仓必须跳过 database / message-queue 两端。『字段』一词在前端指接口出入参、",
+    "在数据库那边指 schema，同一句话触发两套门禁，结果是前端改个接口被要求写 migration。",
+    "在 standards.json 的 stacks 里把那两端设 off 即可。",
+    "",
+    "── 第一波不必接 ──",
+    "ToB 控制台场景下这几项的 ROI 低于契约和 i18n：埋点、前端权限点、路由 query 对齐、",
+    "性能预算、a11y。有了再加，不要第一天塞满注入面。"
+  ],
+
+  "stack": "frontend-web",
+
+  "items": [
+    {
+      "id": "FE-UI-001",
+      "title": "只用本仓主题 token，禁止发明色值",
+      "body": "颜色、间距、圆角、字号一律取本仓主题 token。不要写字面色值，也不要从设计稿里目测一个近似值。找不到对应 token 就停下来问，不要先写死回头再说。",
+      "why": "发明的色值在换主题/暗色模式时不会跟着变，而且 review 看不出来它是错的 —— 它看起来就是个正常的颜色。",
+      "paths": ["src/**/*.tsx", "src/**/*.jsx", "src/**/*.vue", "src/**/*.less", "src/**/*.scss", "src/**/*.css"],
+      "excludePaths": ["src/**/*.test.*", "src/**/__mocks__/**", "src/**/*.stories.*", "**/theme/**", "**/tokens/**"],
+      "timing": ["session_start", "post_write"],
+      "severity": "remind",
+      "check": {
+        "kind": "content_regex",
+        "patterns": [
+          {
+            "pattern": "(color|background|background-color|border|border-color|fill|stroke|box-shadow|outline)\\s*:\\s*['\"`]?\\s*(#[0-9a-fA-F]{3,8}\\b|rgba?\\(|hsla?\\()",
+            "flags": "i",
+            "message": "这里写了字面色值。换成本仓主题 token。"
+          }
+        ]
+      },
+      "landing": ["plugin", "lint"],
+      "hint": "先在仓里找 token 定义（常见位置：theme/、tokens/、variables.less）。硬落点是 stylelint 的 declaration-property-value-allowed-list。",
+      "tags": ["样式", "颜色", "主题", "token", "css", "less", "ui"],
+      "enabled": true
+    },
+    {
+      "id": "FE-UI-002",
+      "title": "设计稿权威源必须写死",
+      "body": "设计稿的权威源在项目层规范里写死 —— Figma 还是 HTML 原型，听谁的。两个源不一致时按写死的那个，不要自己取折中。拿不到权威源就停下来问，不要照着截图目测。",
+      "why": "『Figma 和原型不一样，我按看起来更合理的那个做了』是返工的常见起点。",
+      "timing": ["session_start"],
+      "severity": "inject",
+      "check": { "kind": "none" },
+      "landing": ["human"],
+      "hint": "在 <repo>/.codebuddy/standards/frontend-web.json 里覆盖这一条的 body，把权威源写清楚。",
+      "tags": ["设计稿", "figma", "原型", "ui", "还原"],
+      "enabled": true
+    },
+    {
+      "id": "FE-UI-003",
+      "title": "空态 / 加载 / 异常 / 栅格四件套不许省",
+      "body": "任何有数据请求的页面或组件都要处理：空态、加载中、请求失败、以及响应式栅格。只写 happy path 的页面在真实数据下必然出问题。",
+      "why": "这四种状态在开发环境很难自然出现，所以最容易被漏掉 —— 然后在预发环境被测试提一堆 bug。",
+      "paths": ["src/views/**", "src/pages/**"],
+      "timing": ["session_start"],
+      "severity": "inject",
+      "check": { "kind": "none" },
+      "landing": ["human"],
+      "tags": ["空态", "加载", "异常", "loading", "栅格", "页面"],
+      "enabled": true
+    },
+    {
+      "id": "FE-LIB-001",
+      "title": "组件库包名锁死，禁止引入第二套 UI 库",
+      "body": "UI 组件库包名锁死（本仓用哪个见 repo-facts.componentLibrary）。禁止因为『那个库这个组件更好用』就引入第二套 —— 两套样式会串，而且打包体积翻倍。确实缺组件时先查现有库的完整目录。",
+      "why": "两套 UI 库的样式会互相污染，而污染的症状出现在完全无关的页面上。",
+      "paths": ["package.json", "src/**"],
+      "timing": ["session_start", "pre_write"],
+      "severity": "ask",
+      "check": { "kind": "none" },
+      "landing": ["plugin", "lint"],
+      "hint": "跑 `repo-guard lib search <要什么>` 查本仓组件库里有没有现成的。",
+      "tags": ["组件库", "antd", "tea", "ui库", "依赖"],
+      "enabled": true
+    },
+    {
+      "id": "FE-LIB-002",
+      "title": "新建组件前先查库、再查仓内高扇入组件",
+      "body": "新建公共组件之前必须先做两件事：查组件库目录有没有现成的；查仓内高扇入组件有没有能复用的。都没有才自己写。",
+      "why": "重复造的组件不会被别人发现，于是同一个下拉框在仓里有四个实现，改一次样式要改四处。",
+      "paths": ["src/components/**", "src/hooks/**"],
+      "timing": ["pre_write"],
+      "severity": "block",
+      "check": { "kind": "require_tool", "tool": "lib_search" },
+      "landing": ["plugin"],
+      "hint": "先跑 `repo-guard lib search <要什么>`，再跑 `repo-guard hot` 看高扇入组件。",
+      "tags": ["新建组件", "组件", "复用", "轮子"],
+      "enabled": false,
+      "confirmed": false,
+      "_why_disabled": "新建文件被拦时 AI 可能干脆放弃这个方案，容错空间远小于改已有文件。等 governance 有误伤率数据再开。"
+    },
+    {
+      "id": "FE-LIB-003",
+      "title": "公共组件受影响入口 ≥ 5 时只加可选 prop",
+      "body": "公共组件的受影响入口 ≥ 5 时，只允许新增**可选** prop，不许改签名、不许改默认行为、不许把可选改成必填。需要破坏性改动时先报告影响面并等确认。",
+      "why": "改一个被 12 处引用的组件签名，等于同时改 12 个页面 —— 而那 12 个页面的测试不在这次改动范围里。",
+      "paths": ["__PUBLIC_LAYER__"],
+      "timing": ["session_start", "pre_write"],
+      "severity": "block",
+      "check": { "kind": "require_tool", "tool": "impact" },
+      "landing": ["plugin"],
+      "hint": "跑 impact 拿受影响入口数。≥ 5 就只加可选 prop。",
+      "tags": ["公共组件", "prop", "签名", "影响面"],
+      "enabled": true,
+      "confirmed": true
+    },
+    {
+      "id": "FE-API-001",
+      "title": "先 trace 再对字段，禁止凭名字猜",
+      "body": "页面实际打的接口与出入参，必须先 trace 确认，再对字段。**禁止凭字段名猜语义。** 看起来像 typo 的标识符可能是后端为兼容老客户端保留的别名 —— 不要『顺手改对』。",
+      "why": "『这个字段名明显写错了』是最危险的判断之一。真实踩过：改对了一个 typo，结果老版本客户端全部解析失败。",
+      "paths": ["src/api/**", "src/services/**", "src/request/**", "src/**/api/**", "src/**/services/**", "src/**/request/**", "src/**/*api*.ts"],
+      "timing": ["session_start", "prompt_submit"],
+      "severity": "remind",
+      "check": { "kind": "none" },
+      "landing": ["plugin", "human"],
+      "hint": "跑 `repo-guard trace <页面路径>` 看这个页面实际打到哪些接口、真实出入参是什么。contracts 给的类型草稿必须人工 review。",
+      "tags": ["接口", "字段", "api", "请求", "typo", "改名"],
+      "enabled": true
+    },
+    {
+      "id": "FE-LAYER-001",
+      "title": "页面层与公共层职责分离",
+      "body": "`views/` `pages/` 放页面，`components/` `hooks/` 放可复用件。单页逻辑不进公共层 —— 一个只有这个页面用的 hook 放在页面目录里。公共层路径清单必须人确认，不用工具默认值。",
+      "why": "单页逻辑塞进公共层之后，下一个人会以为它是通用的，照着用然后发现行为不对。",
+      "timing": ["session_start", "post_write"],
+      "severity": "remind",
+      "check": { "kind": "none" },
+      "landing": ["plugin", "lint"],
+      "hint": "公共层清单见 .codebuddy/repo-facts.json 的 publicLayer；跑 `repo-guard init` 能看到推测依据。",
+      "tags": ["目录", "分层", "views", "pages", "components", "hooks"],
+      "enabled": true
+    },
+    {
+      "id": "FE-I18N-001",
+      "title": "JSX 不写死中文",
+      "body": "JSX / 模板里不许写死中文文案，一律走 i18n key。新增文案要同步补 key 定义。不要『先写死回头再提』—— 那个回头不会来。",
+      "why": "写死的中文在做国际化时要逐个找出来，而 grep 找不到的那些（拼接的、条件的）会一直漏。",
+      "paths": ["src/**/*.tsx", "src/**/*.jsx", "src/**/*.vue"],
+      "excludePaths": ["src/**/*.test.*", "src/**/__mocks__/**", "src/**/*.stories.*"],
+      "timing": ["post_write"],
+      "severity": "remind",
+      "check": {
+        "kind": "content_regex",
+        "patterns": [
+          {
+            "pattern": ">\\s*[\\u4e00-\\u9fa5][^<>{]*<",
+            "message": "JSX 里写死了中文文案，改成 i18n key。"
+          }
+        ]
+      },
+      "landing": ["plugin", "lint"],
+      "hint": "硬落点是 eslint 的 i18n 插件（AST 级判定，能区分注释和测试）。这里的正则一定有漏报和误报。",
+      "tags": ["i18n", "国际化", "文案", "中文"],
+      "enabled": true
+    },
+    {
+      "id": "FE-TYPE-001",
+      "title": "禁随意 any，公共类型显式导出",
+      "body": "不许用 `any` 绕过类型检查。确实需要逃逸时用 `unknown` 加窄化，并写注释说明为什么。公共类型显式导出，不要让调用方去 infer。",
+      "why": "`as any` 过编译之后，错误会在运行时以一个完全无关的报错出现。",
+      "paths": ["src/**/*.ts", "src/**/*.tsx"],
+      "excludePaths": ["src/**/*.test.*", "src/**/*.d.ts"],
+      "timing": ["post_write"],
+      "severity": "remind",
+      "check": {
+        "kind": "content_regex",
+        "patterns": [
+          {
+            "pattern": "\\bas\\s+any\\b|:\\s*any\\b",
+            "message": "这里用了 any。改成具体类型，或用 unknown + 窄化并写清为什么。"
+          }
+        ]
+      },
+      "landing": ["plugin", "lint", "ci"],
+      "hint": "硬落点是 tsc --strict + @typescript-eslint/no-explicit-any 进 CI。",
+      "tags": ["类型", "any", "typescript", "ts"],
+      "enabled": true
+    },
+    {
+      "id": "FE-SKIP-001",
+      "title": "前端仓跳过数据库与消息队列规范",
+      "body": "纯前端仓库必须把 database / message-queue 两端关掉。这不是一条代码规范，是一条**配置元规则**：『字段』一词在前端指接口出入参、在数据库那边指 schema，同一句话触发两套门禁会导致前端改个接口被要求写 migration。",
+      "why": "真实踩过的坑。误伤一次，人就再也不信这套门禁了。",
+      "timing": ["session_start"],
+      "severity": "inject",
+      "check": { "kind": "none" },
+      "landing": ["human"],
+      "hint": "在 <repo>/.codebuddy/standards/standards.json 里把 stacks.database 与 stacks.message-queue 设为 \"off\"。",
+      "tags": ["配置", "端"],
+      "enabled": false,
+      "_why_disabled": "它是给人看的配置说明，不需要占注入预算。全栈仓要提醒时再开。"
+    }
+  ]
+}

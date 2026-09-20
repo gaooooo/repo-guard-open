@@ -1,0 +1,192 @@
+{
+  "_": [
+    "L0 跨端契约 —— 双方共同遵守，单方不得擅自修改。",
+    "",
+    "── 为什么这一层几乎全是 inject ──",
+    "契约的另一端在别的仓库里，插件只看得见本仓。能判定的只有『本仓有没有违反自己",
+    "声明的契约』，而这件事 CI 的契约 diff 做得比插件好。",
+    "插件在这里的价值是**让 AI 在动手前就知道这些字段不是自己家的**。",
+    "",
+    "── 强制机制（L0-EN-*）为什么也列在这里 ──",
+    "它们不是给插件执行的，是给人看的『这条规范的硬落点在哪』。",
+    "landing 里没有 plugin 的条目，插件只负责把它说出来，不假装能拦。"
+  ],
+  "stack": "l0-contract",
+  "items": [
+    {
+      "id": "L0-CT-001",
+      "title": "接口契约有唯一权威源",
+      "body": "接口契约（OpenAPI / proto / SDK 定义）有唯一权威源。改契约必须先改权威源再改代码，不许代码先行然后反过来说『以代码为准』。拿不到权威源就停下来问，不要从代码反推一份出来当契约。",
+      "why": "契约有两个源就等于没有契约，对端会按旧的那份继续调。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "ci",
+        "human"
+      ],
+      "tags": [
+        "接口",
+        "契约",
+        "openapi",
+        "proto",
+        "sdk"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "L0-CT-002",
+      "title": "错误码只增不改，禁止就地发明",
+      "body": "错误码只能新增，不能改已有码的含义。新增必须进错误码字典。禁止在 handler 里就地写一个字面量错误码 —— 那个码不在字典里，对端拿到了也不知道是什么。",
+      "why": "错误码是契约的一部分。对端往往按码做分支，改含义等于悄悄改了对方的业务逻辑。",
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "先在仓里找错误码字典（常见位置：errcode/、constants/、pkg/errs/），新增码走字典。",
+      "tags": [
+        "错误码",
+        "errcode",
+        "错误",
+        "字典"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "L0-CT-003",
+      "title": "字段与枚举来自字典，禁止语义相近就复用",
+      "body": "字段名与枚举值来自字段字典。禁止因为『语义差不多』就复用别的字段承载新含义 —— 那个字段的下游按原语义解析，不会跟着你改。新增枚举值必须确认所有消费方能处理未知值。",
+      "why": "复用字段是最难被 review 发现的破坏性变更：类型没变、字段名没变、只有含义变了。",
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "tags": [
+        "字段",
+        "枚举",
+        "字典",
+        "复用"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "L0-CT-004",
+      "title": "Trace-ID 全链路透传",
+      "body": "Trace-ID 在入口生成、全链路透传、日志必带。跨服务调用、异步任务、消息投递都不许丢。新增出口调用时必须把 ctx 一路传下去，不要为了省事新起一个空 context。",
+      "why": "丢一段 trace，整条链路的排查就断在那里。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "lint"
+      ],
+      "tags": [
+        "trace",
+        "traceid",
+        "链路",
+        "日志",
+        "ctx"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "L0-EN-001",
+      "title": "每个仓都要有可独立执行的 lint 与类型检查",
+      "body": "编码规范的硬落点是可独立执行的 lint 命令 + 类型检查命令，不是 prompt 里的格式说教。命令名写进本仓 README 或 package.json script，让 CI 和人都能跑同一条。",
+      "why": "写在 prompt 里的格式要求，模型遵守是概率；写在 lint 里，它是确定的。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "lint",
+        "ci"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "L0-EN-002",
+      "title": "MR 必须跑契约 diff",
+      "body": "MR 必须跑契约 diff 校验。破坏性变更（删字段、改类型、改必填性、改枚举语义）必须显式标注并通知对端，不许靠 code review 碰运气。",
+      "why": "人 review 能判断『这条该不该改』，但验证不了『这个改动会不会打挂某个还在跑的客户端』。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "ci"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "L0-EN-003",
+      "title": "CI 不绿不许合，覆盖率缺口必须显式说明",
+      "body": "CI 是唯一能卡住合并的地方，也是唯一的验证证据。本地跑绿不算。覆盖率有缺口时必须在 MR 里显式说明缺在哪，不许只贴一句『已测』。",
+      "why": "本地环境与 CI 的差异（依赖版本、环境变量、数据）恰恰是最容易出问题的地方。",
+      "timing": [
+        "session_start",
+        "stop"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "ci"
+      ],
+      "enabled": true
+    },
+    {
+      "_timing_why": "原为 ['stop'] —— 而 stop 时机当前没有任何挂载点（Stop 钩子只读 guard 配置），那让这条永远不输出。改成 session_start：它是 inject 级，注入面只占一行。",
+      "id": "L0-EN-004",
+      "title": "MR 必须说明改了什么契约、影响哪些对端",
+      "body": "MR 描述必须写：改了哪些对外契约、影响哪些对端、需不需要对端同步发版。空 MR 描述等于把判断责任推给 reviewer。",
+      "why": "reviewer 不知道这个字段有没有外部调用方 —— 只有写代码的人可能知道。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "ci",
+        "human"
+      ],
+      "enabled": true
+    }
+  ]
+}

@@ -46,6 +46,15 @@ import { runMcp } from '../mcp/server.js';
 import { renderGovernance } from './governance.js';
 import { renderGuardShow, runGuardInit } from '../gates/guard-init.js';
 import { loadGuardConfig } from '../gates/config.js';
+import {
+  renderStandardsAudit,
+  renderStandardsCheck,
+  renderStandardsList,
+  runStandardsInit,
+} from './standards.js';
+import { runDoctor } from './doctor.js';
+import { runRedlinesInit } from './redlines.js';
+import { loadStandards } from '../standards/loader.js';
 
 const HELP = `
 repo-guard —— 仓库体检与影响面工具（零服务端）
@@ -60,9 +69,15 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard lib search <要什么>    UI 组件库里有没有现成的
   repo-guard contracts [接口]       反推导出接口类型草稿（必须人工 review）
   repo-guard audit                 红线体检：规则守空气没、有没有后门、证据还准不准
+  repo-guard redlines init [--write] 把部门红线模板铺进 .codebuddy/redlines.json
   repo-guard governance            治理留痕报表：这些门在做有用功还是在骚扰人
   repo-guard guard init [--write]  铺开协作全景七道门的配置骨架（全部默认关）
   repo-guard guard show            打印实际生效的门禁配置（排查「配了没生效」）
+  repo-guard standards list        研发规范生效清单（哪些端、哪一层、实际强度）
+  repo-guard standards check <文件…> 规范自查：这些文件违反了什么，人审/硬拦级非零退出
+  repo-guard standards init [--write] 铺开五端研发规范模板（默认只提醒，不拦）
+  repo-guard standards audit       规范体检：有没有守空气、有没有被静默降级
+  repo-guard doctor                配置体检：填完配置跑它，查 JSON 坏没坏、条目会不会静默失效
   repo-guard mcp                   作为 stdio MCP 给 AI 用
   repo-guard hook <name>           插件钩子（由宿主调用）
 `;
@@ -99,7 +114,7 @@ export function reportContext(repoDir: string, handle: GraphHandle): ReportConte
 }
 
 /** 带值的选项。解析位置参数时要把它们的值一起跳过 */
-const VALUE_FLAGS = new Set(['--limit', '--min-call-sites']);
+const VALUE_FLAGS = new Set(['--limit', '--min-call-sites', '--stack']);
 
 function flagNumber(argv: string[], name: string, fallback: number): number {
   const i = argv.indexOf(name);
@@ -226,7 +241,7 @@ async function main(): Promise<number> {
         return 2;
       }
       const handle = await getGraph(repoDir);
-      recordQueried(rel);
+      recordQueried(repoDir, rel);
       record('graph_query', repoDir, { file: rel, detail: 'impact' });
       outText(renderImpactCli(handle.graph, rel));
       return 0;
@@ -234,7 +249,7 @@ async function main(): Promise<number> {
 
     case 'hot': {
       const handle = await getGraph(repoDir);
-      recordHotQuery();
+      recordHotQuery(repoDir);
       record('graph_query', repoDir, { detail: 'hot' });
       outText(renderHotCli(handle.graph, flagNumber(argv, "--limit", 10)));
       return 0;
@@ -259,7 +274,7 @@ async function main(): Promise<number> {
         return 2;
       }
       const handle = await getGraph(repoDir);
-      recordSimilarSearch(intent);
+      recordSimilarSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'similar' });
       outText(`\n${renderSimilar(handle.graph, { intent, limit: flagNumber(argv, "--limit", 3) }, reportContext(repoDir, handle))}`);
       return 0;
@@ -277,7 +292,7 @@ async function main(): Promise<number> {
       }
       const facts = readFacts(repoDir);
       const info = loadLibrary(repoDir, facts?.componentLibrary ?? null);
-      recordLibSearch(intent);
+      recordLibSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'lib_search' });
       outText(`\n${renderLibSearch(info, intent, flagNumber(argv, "--limit", 5))}`);
       return 0;
@@ -333,6 +348,57 @@ async function main(): Promise<number> {
     case 'governance': {
       outText(renderGovernance(repoDir));
       return 0;
+    }
+
+    case 'standards': {
+      const sub = positionals(argv, 1)[0];
+
+      if (sub === 'init') {
+        const r = runStandardsInit(repoDir, argv.includes('--write'));
+        outText(r.text);
+        return r.exitCode;
+      }
+
+      // 其余三个子命令都要先加载快照。facts 可能为 null（还没跑过 init）——
+      // 那时端探测只能靠目录特征，__PUBLIC_LAYER__ 展开成空
+      const snap = loadStandards(repoDir, readFacts(repoDir));
+
+      if (sub === 'list') {
+        const i = argv.indexOf('--stack');
+        outText(renderStandardsList(snap, i >= 0 ? argv[i + 1] : undefined));
+        return 0;
+      }
+      if (sub === 'check') {
+        const r = renderStandardsCheck(repoDir, snap, positionals(argv, 2));
+        outText(r.text);
+        return r.exitCode;
+      }
+      if (sub === 'audit') {
+        const r = renderStandardsAudit(snap);
+        outText(r.text);
+        return r.exitCode;
+      }
+
+      err('用法：repo-guard standards list [--stack <端>] | check <文件…> | init [--write] | audit');
+      return 2;
+    }
+
+    case 'redlines': {
+      if (positionals(argv, 1)[0] !== 'init') {
+        err('用法：repo-guard redlines init [--write]');
+        return 2;
+      }
+      const r = runRedlinesInit(repoDir, argv.includes('--write'));
+      outText(r.text);
+      return r.exitCode;
+    }
+
+    case 'doctor': {
+      // 强制全端：填配置的人要检查自己填的全部条目，而不只是当前仓库探测到的那几端
+      const snap = loadStandards(repoDir, readFacts(repoDir), { forceAllStacks: true });
+      const r = runDoctor(repoDir, snap);
+      outText(r.text);
+      return r.exitCode;
     }
 
     default:

@@ -33,7 +33,14 @@ import { findRepoRoot, toRepoRelative } from '../runtime/paths.js';
 import { countLines, readFacts, type RepoFacts } from '../runtime/repo-facts.js';
 import { loadRedlines } from '../runtime/redlines.js';
 import { judge, denyReason, shouldBlock } from '../runtime/guard.js';
-import { setSessionId, sweepStaleSessions } from '../runtime/session-state.js';
+import {
+  hasHotQueried,
+  hasLibSearched,
+  hasQueried,
+  hasSimilarSearched,
+  setSessionId,
+  sweepStaleSessions,
+} from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
 import { loadGuardConfig, type GuardConfig } from '../gates/config.js';
 import { buildInjection, matchTaskRoutes } from '../gates/inject.js';
@@ -42,6 +49,16 @@ import { judgeGraphEnforce } from '../gates/graph-enforce.js';
 import { judgeLoop, iterationNote, noteToolResult } from '../gates/loop.js';
 import { isDeliveryAction, judgeDelivery, noteEvidence, recordFinalSignal } from '../gates/delivery.js';
 import { restateNote } from '../gates/restate.js';
+import { loadStandards, type StandardsSnapshot } from '../standards/loader.js';
+import {
+  compileBlockRules,
+  injectSegment,
+  isActionable,
+  judgeRequireTool,
+  promptSegment,
+  remindNote,
+  scanFile,
+} from '../standards/evaluate.js';
 
 /** 宿主喂进来的事件。字段全部可选 —— 坏输入不能崩（verify-hooks 的 E1/E2） */
 interface HookInput {
@@ -141,6 +158,18 @@ function toolSucceeded(input: HookInput): boolean {
   return true;
 }
 
+/**
+ * 加载规范快照。
+ *
+ * 单独抽一个函数是为了让"**项目层不存在 = 零行为变化**"这条纪律只有一个入口：
+ * `evaluate.ts` 的每个导出都先过 `isActionable`，而它只认 `projectPresent`。
+ * 全局层（插件自带）永远不驱动运行时行为 —— 否则升级插件就等于所有人被迫
+ * 接受一堆新输出。
+ */
+function standardsOf(repoDir: string, facts: RepoFacts | null): StandardsSnapshot {
+  return loadStandards(repoDir, facts);
+}
+
 // ══════════════════ L0 注入面 ══════════════════
 
 /**
@@ -154,18 +183,20 @@ function sessionStart(input: HookInput): void {
   const facts = readFacts(repoDir);
   record('session_start', repoDir);
 
+  const std = injectSegment(standardsOf(repoDir, facts), 'session_start');
+
   if (!facts) {
-    emitContext(
-      'SessionStart',
-      '本仓还没跑过 repo-guard init —— 公共层与红线都未配置，写前守卫不会生效。',
-    );
+    // 规范可能铺了但 repo-facts 没跑过 —— 两件事互相独立，各说各的
+    const head = '本仓还没跑过 repo-guard init —— 公共层与红线都未配置，写前守卫不会生效。';
+    emitContext('SessionStart', std ? `${head}\n\n${std}` : head);
     return;
   }
 
   // guard 配置不存在时 buildInjection 只产出公共层那一段，
   // 与接入 L0 之前的输出逐字节相同 —— 铁律 ④
   const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
-  if (text) emitContext('SessionStart', text);
+  const all = [text, std].filter(Boolean).join('\n\n');
+  if (all) emitContext('SessionStart', all);
 }
 
 /**
@@ -177,13 +208,18 @@ function sessionStart(input: HookInput): void {
 function postCompact(input: HookInput): void {
   const repoDir = repoOf(input);
   const facts = readFacts(repoDir);
-  if (!facts) return;
+  const std = injectSegment(standardsOf(repoDir, facts), 'post_compact');
+  if (!facts) {
+    if (std) emitContext('PostCompact', `（上下文压缩后重新注入）\n${std}`);
+    return;
+  }
   const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
-  if (text) emitContext('PostCompact', `（上下文压缩后重新注入）\n${text}`);
+  const all = [text, std].filter(Boolean).join('\n\n');
+  if (all) emitContext('PostCompact', `（上下文压缩后重新注入）\n${all}`);
 }
 
 /**
- * 用户提交提问：按任务类型注入必读清单 + 需求复述提醒。
+ * 用户提交提问：按任务类型注入必读清单 + 相关规范正文 + 需求复述提醒。
  *
  * ⚠️ **绝不能阻塞。** `continue:false` 会把用户的提问整个吃掉，
  * 代价远大于任何收益。
@@ -196,6 +232,8 @@ function userPromptSubmit(input: HookInput): void {
   const parts: string[] = [];
   const routed = matchTaskRoutes(cfg, prompt);
   if (routed) parts.push(routed);
+  const std = promptSegment(standardsOf(repoDir, readFacts(repoDir)), prompt);
+  if (std) parts.push(std);
   const restated = restateNote(cfg, repoDir, prompt);
   if (restated) parts.push(restated);
 
@@ -220,27 +258,30 @@ function preWrite(input: HookInput): void {
   const repoDir = repoOf(input);
   const facts = readFacts(repoDir);
   const cfg = loadGuardConfig(repoDir);
+  const std = standardsOf(repoDir, facts);
+  const stdRules = compileBlockRules(std);
 
-  // 未配置 repo-facts 时公共层守卫不生效，但 guard 的其他门仍可能开着。
-  // 所以这里不能直接 return —— 除非 guard 也没配。
-  if (!facts && !cfg.present) return; // F1 用例：完全未配置 → fail-open
+  // 未配置 repo-facts 时公共层守卫不生效，但 guard / standards 的门仍可能开着。
+  // 所以这里不能直接 return —— 除非三者都没配。
+  if (!facts && !cfg.present && !stdRules.length) return; // F1 用例：完全未配置 → fail-open
 
   const rel = toRepoRelative(repoDir, raw);
   if (!rel) return; // 仓库外：不管（T2 用例）
 
   // ① L3 循环门
-  const loop = judgeLoop(cfg, input.tool_name ?? 'write', input.tool_input, rel);
+  const loop = judgeLoop(repoDir, cfg, input.tool_name ?? 'write', input.tool_input, rel);
   if (loop.blocked) {
     record('loop_deny', repoDir, { file: rel, detail: loop.kind });
     emitDeny('PreToolUse', loop.reason!);
     return;
   }
 
-  // ② L1 红线与禁改清单
+  // ② L1 红线与禁改清单（standards 的 block 级规范一起交给同一个引擎判）
   const snapshot = loadRedlines(repoDir);
-  const red = judgeRedline(repoDir, snapshot, cfg, rel, input.tool_input ?? {});
+  const red = judgeRedline(repoDir, snapshot, cfg, rel, input.tool_input ?? {}, stdRules);
   if (red.blocked) {
-    record(red.kind === 'no_refactor' ? 'no_refactor_deny' : 'redline_hit', repoDir, {
+    const fromStandards = red.ruleId?.startsWith('STD-') === true;
+    record(fromStandards ? 'standards_deny' : red.kind === 'no_refactor' ? 'no_refactor_deny' : 'redline_hit', repoDir, {
       file: rel,
       rule: red.ruleId,
     });
@@ -263,7 +304,7 @@ function preWrite(input: HookInput): void {
   } catch {
     exists = false;
   }
-  const enforce = judgeGraphEnforce(cfg, rel, exists);
+  const enforce = judgeGraphEnforce(repoDir, cfg, rel, exists);
   if (enforce.blocked) {
     record('graph_enforce_deny', repoDir, { file: rel, detail: enforce.kind });
     emitDeny('PreToolUse', enforce.reason!);
@@ -271,6 +312,12 @@ function preWrite(input: HookInput): void {
   }
 
   // ⑤ 公共层守卫（插件核心功能，不受 guard 开关控制）
+  //
+  // ⚠️ 必须排在 standards 的 require_tool **之前**。两者可能判定同一件事
+  //（模板里 CM-LAYER-002 的 paths 就是公共层），而核心功能这份拒绝文案是真机
+  // 调优过的：它给出三种工具调法（MCP / 斜杠命令 / CLI 绝对路径），因为模型按
+  // `impact` 去搜工具名会搜不到，然后判定"工具不存在"改用 grep 凑影响面。
+  // 让 standards 那份较简的文案抢在前面，等于把这个调优成果丢掉。
   if (facts) {
     const v = judge(repoDir, facts, snapshot, raw);
     if (v && shouldBlock(v)) {
@@ -284,8 +331,25 @@ function preWrite(input: HookInput): void {
     }
   }
 
+  // ⑥ 规范的 require_tool：改之前必须先调过某个图谱工具。
+  // 排在核心守卫之后，所以它实际只管核心功能覆盖不到的场景：
+  // 新建文件（similar / hot / lib）、以及公共层之外但也要求先查影响面的路径。
+  // 会话状态在这里读、判定在 evaluate 里做 —— 判定保持纯粹便于单测。
+  const rt = judgeRequireTool(std, rel, {
+    queried: hasQueried(repoDir, rel),
+    libSearched: hasLibSearched(repoDir),
+    hotQueried: hasHotQueried(repoDir),
+    similarSearched: hasSimilarSearched(repoDir),
+    exists,
+  });
+  if (rt.blocked) {
+    record('standards_deny', repoDir, { file: rel, rule: rt.itemId, detail: 'require_tool' });
+    emitDeny('PreToolUse', rt.reason!);
+    return;
+  }
+
   // 放行之后才记"改过这个文件"（范围门预算的分母）
-  noteTouched(rel);
+  noteTouched(repoDir, rel);
 }
 
 // ══════════════════ pre-bash ══════════════════
@@ -322,7 +386,7 @@ function preBash(input: HookInput): void {
   if (!facts) return;
 
   // L3 循环门也管 bash：同一条命令重复跑 3 次基本都是卡住了
-  const loop = judgeLoop(cfg, 'Bash', input.tool_input, null);
+  const loop = judgeLoop(repoDir, cfg, 'Bash', input.tool_input, null);
   if (loop.blocked) {
     record('loop_deny', repoDir, { detail: loop.kind });
     emitDeny('PreToolUse', loop.reason!);
@@ -363,20 +427,45 @@ function postWrite(input: HookInput): void {
   const raw = writeTarget(input);
   const rel = raw ? toRepoRelative(repoDir, raw) : null;
 
-  noteToolResult(cfg, input.tool_name ?? 'write', input.tool_input, rel, toolSucceeded(input));
+  noteToolResult(repoDir, cfg, input.tool_name ?? 'write', input.tool_input, rel, toolSucceeded(input));
 
   const facts = readFacts(repoDir);
-  if (!facts || !rel) return;
+  if (!rel) return;
 
-  const n = countLines(path.join(repoDir, rel));
-  if (n <= facts.lineLimit) return;
+  const notes: string[] = [];
 
-  record('oversize_warn', repoDir, { file: rel, detail: String(n) });
-  emitContext(
-    'PostToolUse',
-    `\`${rel}\` 现在有 ${n} 行，超过本仓上限 ${facts.lineLimit} 行。` +
-      '按本仓已有的拆法拆开，不要自己发明结构。',
-  );
+  // ① 超行数上限。依赖 repo-facts，没配就跳过
+  if (facts) {
+    const n = countLines(path.join(repoDir, rel));
+    if (n > facts.lineLimit) {
+      record('oversize_warn', repoDir, { file: rel, detail: String(n) });
+      notes.push(
+        `\`${rel}\` 现在有 ${n} 行，超过本仓上限 ${facts.lineLimit} 行。` +
+          '按本仓已有的拆法拆开，不要自己发明结构。',
+      );
+    }
+  }
+
+  // ② 规范的 remind 级命中。**只在项目层铺过规范时才有输出**（见 evaluate.ts 文件头）
+  //
+  // ⚠️ `scanFile` 是 evaluate.ts 里唯一不自带 `isActionable` 闸门的导出 ——
+  // 它只看 `snap.enabled`，因为 `standards check` 这个 CLI 必须能在只有全局层时
+  // 给出自查结论。所以**闸门必须由调用方加**，而运行时这一侧就是这里。
+  // 少了它，部门往全局层加一条 remind + post_write + content_regex 的规范，
+  // 会让所有装了这个包、但没铺项目层的仓库都开始收到提醒 —— 那正是
+  // 「项目层不存在 = 零行为变化」要挡住的事。
+  const std = standardsOf(repoDir, facts);
+  const hits = isActionable(std) ? scanFile(std, repoDir, rel, 'post_write') : [];
+  const note = remindNote(hits, rel);
+  if (note) {
+    for (const h of hits) {
+      if (h.severity !== 'remind') continue;
+      record('standards_hit', repoDir, { file: rel, rule: h.item.id });
+    }
+    notes.push(note);
+  }
+
+  if (notes.length) emitContext('PostToolUse', notes.join('\n\n'));
 }
 
 /** 工具失败之后：只更新 L3 计数器，不输出任何东西 */
@@ -385,7 +474,7 @@ function postFail(input: HookInput): void {
   const cfg = loadGuardConfig(repoDir);
   const raw = writeTarget(input);
   const rel = raw ? toRepoRelative(repoDir, raw) : null;
-  noteToolResult(cfg, input.tool_name ?? 'unknown', input.tool_input, rel, false);
+  noteToolResult(repoDir, cfg, input.tool_name ?? 'unknown', input.tool_input, rel, false);
 }
 
 // ══════════════════ L5 交付门 / L4 诚实信号 ══════════════════

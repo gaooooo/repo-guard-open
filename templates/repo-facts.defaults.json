@@ -1,0 +1,69 @@
+{
+  "_": [
+    "部门级默认值 —— 全局层。",
+    "",
+    "── 它只补齐『项目层已存在但某个字段缺失』的情况 ──",
+    "`readFacts` 的第一行是：项目层 `.codebuddy/repo-facts.json` 读不到就返回 null。",
+    "**这一行永远不会因为本文件而改变。** null 是整个写前守卫的总开关：",
+    "没跑过 `repo-guard init --write` 的仓库必须全放行（fail-open），",
+    "否则一个刚 clone 下来的仓库里 AI 什么都干不了。",
+    "",
+    "换句话说，本文件的作用域是：",
+    "  项目层文件不存在  → 守卫不生效，本文件完全不参与",
+    "  项目层文件存在    → 它没写的字段，用这里的值补",
+    "",
+    "── 部门改这里能得到什么 ──",
+    "全部门的仓库跑完 init 之后有一致的行数上限，而不用每个仓去改一遍。",
+    "",
+    "── 为什么出厂值必须与代码里的硬编码逐字相同 ──",
+    "本仓有 5 条 parity 用例在**逐字节比对** `init --write` 落盘的 repo-facts.json。",
+    "出厂值一旦与 `DEFAULT_LINE_LIMIT` 等不一致，那 5 条立刻全红。",
+    "部门改这里是预期用法（那是部门自己的包）；但**本仓发版时必须是出厂值**。"
+  ],
+
+  "_lineLimit": [
+    "单文件行数上限。超过只提醒、不拦 —— 存量超长文件遍地都是，硬拦等于没法干活。",
+    "出厂 500，与 src/runtime/repo-facts.ts 的 DEFAULT_LINE_LIMIT 一致。",
+    "",
+    "部门调它之前先想清楚：这个值同时会被写进 init 打印的 lint 片段建议里",
+    "（'max-lines': ['error', N]）。定得太小，人第一反应是把整条规则关掉。"
+  ],
+  "lineLimit": 500,
+
+  "_componentLibrary": [
+    "UI 组件库包名，如 antd / element-plus / @arco-design/web-react。",
+    "null = 不预设，由各仓自己在 repo-facts.json 里填。",
+    "",
+    "⚠️ **出厂必须是 null，不要在这里放『已知组件库识别表』。**",
+    "两个理由：",
+    "① parity 的 web fixture 的 package.json 里就有 antd。一旦这里能识别出它，",
+    "   落盘的 componentLibrary 从 null 变成 \"antd\"，5 条 artifact 用例全红。",
+    "② 更隐蔽的是 lib-search / mcp-lib-search 这两条**已经登记为已知偏差**——",
+    "   它们的输出跟着变化后仍然显示『已知偏差』而不是 DIFF。",
+    "   结果是拿到一个绿的 parity 和一个真实的回归，这是最坏的失败模式。",
+    "",
+    "部门确实全线统一用某个组件库时，在自己的包里改成那个包名是合理的。"
+  ],
+  "componentLibrary": null,
+
+  "_publicLayerConventions": [
+    "部门的公共层目录惯例。**它不参与 publicLayer 的计算结果。**",
+    "",
+    "`init` 只会把它作为一段**建议文本**打出来（『部门惯例还建议关注这些目录』），",
+    "真正写进 repo-facts.publicLayer 的仍然是图谱推测 + 人确认。",
+    "",
+    "── 为什么不让它直接进 publicLayer ──",
+    "爆炸半径最大的一个改动。publicLayer 一变，连锁反应是：",
+    "  5 条 artifact 用例（落盘内容）",
+    "  所有 init-dry / init-write 的『推测的公共层』段",
+    "  SessionStart 注入的 guardSegment",
+    "  所有 check-* 与 hook-pre-write-* 的拦截判定",
+    "而且方向是危险的那一侧：部门惯例里多写一个目录，全部门的仓库都开始",
+    "对那个目录下的改动要求先查影响面 —— 误伤会让人直接卸载。",
+    "",
+    "公共层必须一仓一议、人确认，这是 src/cli/init.ts 文件头的原始论证。",
+    "",
+    "示例：[\"src/components/\", \"src/utils/\", \"internal/pkg/\"]"
+  ],
+  "publicLayerConventions": []
+}

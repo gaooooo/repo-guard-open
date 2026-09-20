@@ -22,7 +22,13 @@ import { hotSpots } from '../engine/graph-builder.js';
 import type { CodeGraph } from '../engine/graph/types.js';
 import { missingPublicLayerWarning, patternsMissingFromGraph } from '../engine/public-layer-audit.js';
 import { CONFIG_DIR, readJson } from '../runtime/paths.js';
-import { DEFAULT_LINE_LIMIT, readFacts, writeFacts, type RepoFacts } from '../runtime/repo-facts.js';
+import {
+  normalizePrefix,
+  readFacts,
+  readFactsDefaults,
+  writeFacts,
+  type RepoFacts,
+} from '../runtime/repo-facts.js';
 import type { GraphHandle } from '../runtime/graph-cache.js';
 import { scan, type ScanResult } from './scan.js';
 import { RULE } from './render.js';
@@ -223,6 +229,7 @@ export function renderInit(
   const checks = runChecks(repoDir);
   const existing = readFacts(repoDir);
   const guesses = guessPublicLayer(graph);
+  const defaults = readFactsDefaults();
 
   // ── 头部：这个仓是什么 ──
   const identify = handle.fromCache
@@ -282,6 +289,20 @@ export function renderInit(
     for (const g of guesses) {
       lines.push(`    ${g.prefix.padEnd(25)}依据：${g.evidenceFile} 被 ${g.routeCount} 个入口引用`);
     }
+  }
+
+  // 部门惯例：**只作为建议打出来，绝不进 publicLayer**。
+  // 让它参与计算的爆炸半径见 templates/repo-facts.defaults.json 的 _publicLayerConventions。
+  // 出厂为空数组，所以默认情况下这一段不产生任何输出 —— parity 的 init 用例不受影响。
+  const conventions = defaults.publicLayerConventions.filter(
+    (c) => !guesses.some((g) => normalizePrefix(g.prefix) === normalizePrefix(c)),
+  );
+  if (conventions.length) {
+    lines.push(
+      '',
+      '部门惯例还建议关注这几个目录（推测没覆盖到的，自己判断要不要加进 publicLayer）',
+    );
+    for (const c of conventions) lines.push(`    ${c}`);
   }
 
   if (existing) {
@@ -347,8 +368,10 @@ export function renderInit(
     // 已有配置时**不覆盖人确认过的清单**。人可能删掉了误判的目录、加了推测不到的目录，
     // 重跑 init 把它冲掉是不可接受的数据丢失。
     publicLayer: existing ? existing.publicLayer : guesses.map((g) => g.prefix),
-    componentLibrary: existing ? existing.componentLibrary : null,
-    lineLimit: existing ? existing.lineLimit : DEFAULT_LINE_LIMIT,
+    // 新仓用部门默认值。出厂是 null / 500，与改造前的硬编码逐字相同，
+    // 所以 5 条 artifact parity 用例不受影响；部门改了才会变。
+    componentLibrary: existing ? existing.componentLibrary : defaults.componentLibrary,
+    lineLimit: existing ? existing.lineLimit : defaults.lineLimit,
     generatedAt: new Date().toISOString(),
   };
   writeFacts(repoDir, facts);

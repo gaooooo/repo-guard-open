@@ -1072,3 +1072,110 @@ opts: tool_use_id / signal / agent_id / suggestions / blocked_path / decision_re
 **⑤ CI 场景不要指望人审**：非交互模式下阶段❽会把未决 `ask` 转成 `deny`（`dontAsk` 更是直接改写）。CI 里的正确姿势是**让它失败并报告**，把人审挪到 PR/MR 环节，而不是让流水线挂在等审批上。
 - 改了插件不改 `version` = 用户拿不到更新（缓存键）。
 - 规则/记忆文件改动不热生效，需重启。
+
+---
+
+## 14. 研发规范落点索引
+
+> 前面 13 章回答「CodeBuddy 有哪些控制点」；这一章回答「**我们的研发规范该落在哪个控制点上**」。
+> 规范内容清单见 [`STANDARDS.md`](STANDARDS.md)，可执行配置见 `templates/standards/`。
+> 主体标记沿用 §0：**P** 插件可分发 / **J** 项目级 / **C** 运行时 / **U** 用户级。
+
+### 14.1 四份配置各管什么（都不迁移）
+
+| 配置文件 | 管什么 | 谁维护 | 主体 |
+| :--- | :--- | :--- | :--- |
+| `.codebuddy/repo-facts.json` | **事实**：`publicLayer` / `lineLimit` / `componentLibrary` / `analyzer`。从图谱推出来、人确认 | `repo-guard init --write` 生成，人过一眼 | **J** |
+| `.codebuddy/redlines.json` | **红线意图**：`rules[].protects` / `paths` / `contentMatchers`。代码里读不出来的知识 | 人手写 | **J** |
+| `.codebuddy/guard/` | **七道门总闸与流程配置**：注入面、准入、循环、交付、复述 | `repo-guard guard init --write` 铺骨架 | **J** |
+| `.codebuddy/standards/` | **研发规范**：五端标准、门禁、红线正文 | `repo-guard standards init --write` 铺模板 | **J**（全局层在插件里 = **P**） |
+
+两层规范的物理位置：
+
+```
+templates/standards/*.json          全局层（部门规范）→ 随插件版本走，主体 P
+<repo>/.codebuddy/standards/*.json  项目层（团队共识）→ 进 git，主体 J
+```
+
+合并按条目 `id`，字段级浅合并。项目层放宽（降级 / `enabled:false`）必须写 `override_reason`，否则 override 被忽略。
+
+> ⚠️ 全局层是**只读默认值**。插件安装后缓存在 `~/.codebuddy/plugins/cache/<市场>/<插件>/<版本>/`（见 §7），升级换目录，所以不要指望在安装后的副本里改 —— 要改就改插件源码仓，或者用项目层覆盖。
+
+> ⚠️ **只有项目层存在时，规范才驱动运行时行为。** 全局层装上插件就存在，拿它驱动注入意味着所有人一升级插件就被迫接受一堆新输出。所以 `evaluate.ts` 的每个入口都先过 `isActionable()`，而它只认 `projectPresent`。没铺 `.codebuddy/standards/` = 零行为变化（`verify-hooks` 的 59 条用例就跑在这个前提上），此时全局层只用于 `standards check` 这类人主动跑的 CLI 自查。
+
+### 14.2 规范 → 控制点映射
+
+`severity` 决定用哪个控制点，`check.kind` 决定判得准不准：
+
+| severity | 控制点 | Hook 事件 | 输出字段 | 权限链位置 |
+| :--- | :--- | :--- | :--- | :--- |
+| `inject` | 上下文注入（§2） | `SessionStart` / `PostCompact` | `hookSpecificOutput.additionalContext` | 不参与 |
+| `inject`（按任务） | 上下文注入 | `UserPromptSubmit` | `additionalContext` | 不参与 |
+| `remind` | 工具后注入（§2） | `PostToolUse` | `additionalContext` | 不参与 |
+| `ask` | 红线人工审批（§13.2 方式 2） | `PreToolUse` | `permissionDecision: "ask"` + `permissionDecisionReason` | **阶段 0** |
+| `block` | 事件拦截（§3.6） | `PreToolUse` | `permissionDecision: "deny"` | **阶段 0** |
+
+**注入面只给 `title`，正文留到两个时刻才给**：`UserPromptSubmit` 按 `tags` 命中时（这一句话确实相关）、以及被拦/被提醒时（此刻它必须知道为什么）。45 条规范的正文加起来远超 1500 token 的段预算，会话开始时模型需要的是"知道有这些约束"，不是背下每条。
+
+**standards 的 `block` 不受 guard 的 `L1_admission` 总闸控制。** 它有自己的总闸（`standards.json` 的 `enabled` + `maxSeverity`）—— 把 `maxSeverity` 调到 `block` 已经是极其明确的表态，再要求同时打开 guard 的 L1 就成了两套开关，人会困惑「我开了为什么不拦」。实现上 `judgeRedline` 的 `extraRules` 参数走独立闸门（`src/gates/admission.ts`）。
+
+**`PreToolUse` 的判定顺序里，公共层守卫排在 standards 的 `require_tool` 之前。** 两者可能判同一件事（模板 `CM-LAYER-002` 的 paths 就是公共层），而核心功能那份拒绝文案是真机调优过的：它给出三种工具调法（MCP 全名 / 斜杠命令 / CLI 绝对路径），因为模型按 `impact` 去搜工具名会搜不到，然后判定「工具不存在」改用 grep 凑影响面。让 standards 那份较简的文案抢在前面等于丢掉这个调优成果。
+
+`check.kind` → 判定数据源：
+
+| `check.kind` | 数据源 | 能 `block` 吗 |
+| :--- | :--- | :--- |
+| `none` | — | ❌ |
+| `path_only` | 条目 `paths` glob | ✅ |
+| `protect_symbol` | `redlines.json` 的 `protects` + 红线引擎真 diff | ✅ |
+| `content_regex` | 条目 `patterns[]` | ❌ **永不**（正则判不出意图） |
+| `require_tool` | `$HOME/.repo-guard/state/<repo-id>.json` 的「本轮查过哪些文件」 | ✅ |
+| `require_evidence` | 会话内 Bash 命令记录（`guard/process/delivery.json` 的 `evidencePatterns`） | ❌ |
+
+### 14.3 端 → 规范文件 → 时机
+
+| 端 | 文件 | 主要时机 | 能硬拦的条目 |
+| :--- | :--- | :--- | :--- |
+| L0 跨端契约 | `l0-contract.json` | `session_start` | 无（契约的另一端不在本仓） |
+| 全端共用 | `common.json` | `session_start` / `post_write` / `stop` | `CM-LAYER-002`、`CM-FREEZE-001` |
+| 前端 Web/React | `frontend-web.json` | `session_start` / `post_write` | `FE-LIB-003`、`FE-LIB-002`（默认关） |
+| 后端 Go/Node/Java | `backend-service.json` | `session_start` / `pre_write` / `post_write` | `BE-API-003`、`BE-API-002`（默认关）、`BE-CONF-001`（默认关） |
+| 数据库 | `database.json` | `session_start` / `post_write` | `DB-RL-001`（默认关，需填 symbols） |
+| 消息队列 | `message-queue.json` | `session_start` | `MQ-RL-001`（默认关，需填 symbols） |
+
+**注入预算**：每段 1500 token（§2 的 `SEGMENT_MAX_TOKENS`），五端全量必超。解法是按端裁剪 —— `standards.json` 的 `stacks` 用 `auto` 时由 `repo-facts.analyzer` + `stackDetect` 目录特征探测，只注入命中端；`UserPromptSubmit` 再按条目 `tags` 补该端正文。
+
+### 14.4 插件拦不住的，交给谁
+
+这张表是 §11 选型决策表在「研发规范」这个场景下的具体化。**不假装能拦**是底线：
+
+| 规范 | 为什么插件拦不住 | 落点 | 具体配置 | 主体 |
+| :--- | :--- | :--- | :--- | :--- |
+| `CM-CODE-002` 循环依赖 | 需要全量图 + 增量判定，超出 hook 时间预算 | lint | `import/no-cycle`、golangci-lint | J |
+| `CM-CODE-001` 行数硬拦 | 存量超长文件遍地，硬拦等于没法干活 | lint | `max-lines`（新文件严、存量放宽） | J |
+| `FE-I18N-001` i18n | AST 级判定；正则会把注释与测试算进去 | lint | eslint i18n 插件 | J |
+| `FE-TYPE-001` 禁 `any` | 同上 | lint + CI | `tsc --strict` + `no-explicit-any` | J |
+| `CM-SEC-001` 密钥 | 真正的判定要熵检测 + 历史扫描 | CI | secret scan + pre-commit | J |
+| `CM-SEC-002` 碰生产 | 插件 deny 是黑盒，`/permissions` 面板里审计不到（§3.6） | **宿主 permissions** | `"ask": ["Bash(kubectl:*)", "Bash(mysql:*)", "Bash(aws:*)"]` | **J/L/U** |
+| `CM-VCS-001` 提交门禁 | `git commit` 是人随时会敲的动作，`Stop` 上硬拦直接妨碍人 | **宿主 permissions** | `"ask": ["Bash(git commit:*)", "Bash(git push:*)"]` | **J/L/U** |
+| `L0-EN-002` 契约 diff | 需要对端契约，跨仓 | CI | 契约 diff 流水线 | — |
+| `L0-EN-003` 覆盖率门禁 | 唯一能卡住合并的地方是流水线 | CI | — | — |
+| `L0-EN-004` MR 模板 / CODEOWNERS | 平台能力 | 代码平台 | — | — |
+| `MQ-SCHEMA-002` 生产者消费者同步发布 | 另一端在别的仓库 | CI + human | 契约 diff + MR 描述 | — |
+
+一句话：**确定性规则归 lint，阻断合并归 CI，安全边界归宿主 `permissions`，过程中的「你现在要动的东西很贵」归插件。**
+
+### 14.5 为什么图里的 4 个门禁名没有变成 4 道门
+
+外部规范图里出现过 `modify_api` / `modify_database` / `modify_mq_schema` / `modify_component` 四个门禁名，以及 `verification.buildCmd` / `verification.testCoverageNote`、`publicLayerPatterns` / `pageLayerPatterns` 等字段。这些是**另一套系统的字段名**，本工程不引入，而是落成 standards 条目复用现有机制：
+
+| 图里的名字 | 本工程落点 |
+| :--- | :--- |
+| `modify_api` | `BE-API-002`（`protect_symbol`）+ `BE-API-003`（`require_tool: impact`） |
+| `modify_database` | `DB-*` 条目，`path_only` + `remind`。**刻意不强制查图谱** —— 库字段的「影响面 0」是假信号（SQL、离线任务、其它服务都在图外） |
+| `modify_mq_schema` | `MQ-RL-001`（`protect_symbol`）；同步发布跨仓 → `landing: ['ci','human']` |
+| `modify_component` | `FE-LIB-002`（`require_tool: lib_search`）+ `FE-LIB-003`（`require_tool: impact`），复用已实现的 `guard/process/graph-enforce.json` |
+| `verification.buildCmd` / `testCoverageNote` | `check.kind: 'require_evidence'` + `commands[]`，判定走 `guard/process/delivery.json` 的 `evidencePatterns`；覆盖率缺口写进条目 `hint` |
+| `publicLayerPatterns` / `pageLayerPatterns` | `repo-facts.publicLayer`（已有）+ 条目自己的 `paths`。不引入第二套路径字段 —— 两套必然打架 |
+
+**`block` 级不写第二套判定逻辑**：编译成 `PolicyRule`（id 加 `STD-` 前缀）并入红线快照，复用现成的红线引擎。引擎的误报率是在真实仓库上调出来的，另写一套必然漂。

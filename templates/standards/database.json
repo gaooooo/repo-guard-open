@@ -1,0 +1,306 @@
+{
+  "_": [
+    "数据库规范 —— **独立一端，比后端更危险。**",
+    "",
+    "── 为什么不能并进『后端编码』 ──",
+    "图谱和 grep 都看不到 SQL 里的字段引用、离线任务里的字段引用、其它服务里的字段下游。",
+    "所以数据库字段的『影响面 0』是**假信号**：它只说明『图看得见的范围内没有调用方』，",
+    "不等于可以删。",
+    "",
+    "── 这一端刻意不强制查图谱 ──",
+    "其它端的门禁是『改之前先查 impact』；数据库这一端不这么做，因为查了也不准，",
+    "而一个不准的门禁比没有门禁更糟 —— 它给人虚假的安全感。",
+    "这里的判据是**红线 protects 符号 + 人确认**。"
+  ],
+  "stack": "database",
+  "items": [
+    {
+      "id": "DB-SCHEMA-001",
+      "title": "字段三处联动，漏一处是静默错误",
+      "body": "改一个字段必须同时改三处：序列化 tag（如 bson tag / gorm tag / JPA 注解）、结构体定义、以及查询字面量（如 `bson.M{}` 里的字段名、原生 SQL）。**漏一处不会报错**，只会静默地读不到值或写错位置。",
+      "why": "编译器只检查结构体，不检查字符串里的字段名。这是最难发现的一类 bug —— 没有报错、没有异常，只有数据不对。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/entity/**",
+        "**/repository/**",
+        "**/mapper/**",
+        "**/*.sql"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "path_only"
+      },
+      "landing": [
+        "plugin",
+        "human"
+      ],
+      "hint": "本次改到了 schema 层。逐个确认：tag、结构体、查询字面量三处都改了吗？原生 SQL 与离线任务里的字段名 grep 一遍。",
+      "tags": [
+        "字段",
+        "schema",
+        "bson",
+        "tag",
+        "结构体",
+        "数据库"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "DB-SCHEMA-002",
+      "title": "新代码用字段常量，不写字符串字面量",
+      "body": "新写的查询用字段常量，不要散落字符串字面量。这样改字段名时编译器能帮你找齐。存量的字面量不强制改。",
+      "why": "字面量是上一条『三处联动』之所以容易漏的根本原因。用常量把它变成编译期问题。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/repository/**",
+        "**/mapper/**"
+      ],
+      "timing": [
+        "prompt_submit"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "lint"
+      ],
+      "tags": [
+        "字段",
+        "常量",
+        "字面量"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "DB-MIG-001",
+      "title": "无 migration 不准改字段",
+      "body": "改任何 schema 字段之前，必须先有对应的 migration 文件。不许『先改代码，migration 回头补』—— 那会让线上库与代码永久不一致，而且不一致的症状出现在别人的功能上。",
+      "why": "代码进主干的速度比补 migration 快得多。没有强制关系时，缺失的 migration 会被遗忘。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/entity/**",
+        "**/repository/**",
+        "**/mapper/**",
+        "**/migrations/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "path_only"
+      },
+      "landing": [
+        "plugin",
+        "ci",
+        "human"
+      ],
+      "hint": "确认 migrations/ 下有本次改动对应的文件。没有就先写 migration。",
+      "tags": [
+        "migration",
+        "迁移",
+        "字段",
+        "schema",
+        "建表"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "DB-MIG-002",
+      "title": "migration 必须幂等",
+      "body": "migration 必须幂等：重复执行结果一致（`IF NOT EXISTS` / 先查后改 / 版本号判定）。不许写一次性脚本 —— 灰度、回滚、多环境部署都会让它执行多次。",
+      "why": "非幂等的 migration 在第二次执行时会失败，而失败点通常在半路 —— 留下一个改了一半的库。",
+      "paths": [
+        "**/migrations/**",
+        "**/migrate/**",
+        "**/schema/**",
+        "**/*.sql"
+      ],
+      "timing": [
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "path_only"
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "加 IF NOT EXISTS / 先查后改；另外确认有回滚路径。",
+      "tags": [
+        "migration",
+        "幂等",
+        "迁移",
+        "回滚"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "DB-RL-001",
+      "title": "删列、改语义、线上还在用的名字 —— 一律停下问人",
+      "body": "下面三种改动一律停下来问人：删列、改字段语义（类型不变但含义变了）、改线上还在用的字段名。**『影响面 0』不是放行理由** —— SQL、离线任务、其它服务、BI 报表完全在图谱之外。",
+      "why": "字段是所有下游共享的契约，而下游里至少有一半不在这个仓库里。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/entity/**",
+        "**/repository/**",
+        "**/mapper/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit",
+        "pre_write"
+      ],
+      "severity": "block",
+      "check": {
+        "kind": "protect_symbol",
+        "symbols": []
+      },
+      "landing": [
+        "plugin",
+        "human"
+      ],
+      "hint": "把受保护的字段名写进 .codebuddy/redlines.json 的 rules[].protects，并跑 `repo-guard audit` 确认 paths 没有后门。",
+      "tags": [
+        "删列",
+        "字段",
+        "改名",
+        "红线",
+        "语义"
+      ],
+      "enabled": false,
+      "confirmed": false,
+      "_why_disabled": "symbols 必须填本仓真实的受保护字段名。空 symbols 的 block 等于守空气 —— 跑 `repo-guard audit` 会报出来。"
+    },
+    {
+      "id": "DB-QUERY-001",
+      "title": "索引、N+1、事务边界",
+      "body": "新查询要确认走得到索引；循环里不许发查询（N+1）；事务边界显式声明，不要让事务跨越远程调用。大表的全表扫会打挂库。",
+      "why": "N+1 在开发环境（几十条数据）完全看不出来，在生产（几十万条）直接超时。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/repository/**",
+        "**/mapper/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "human"
+      ],
+      "hint": "这一条一般不进红线 —— 判据依赖数据量与执行计划，静态判不出来。",
+      "tags": [
+        "索引",
+        "n+1",
+        "事务",
+        "查询",
+        "慢查询"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "DB-AUTH-001",
+      "title": "过滤条件下推（与后端鉴权同一条）",
+      "body": "数据权限的过滤条件下推到查询里，不要查出来再过滤。这与 `BE-AUTH-001` 是同一条规则的两个位置 —— 不要在两处写成两套标准。",
+      "why": "两套标准的结果是两边都以为对方管了。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/repository/**",
+        "**/mapper/**"
+      ],
+      "timing": [
+        "session_start",
+        "prompt_submit"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin"
+      ],
+      "tags": [
+        "权限",
+        "过滤",
+        "鉴权",
+        "数据权限"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "DB-VERIFY-001",
+      "title": "仓储层零测试时，绿测试不是安全信号",
+      "body": "仓储层（`internal/repo` 一类）没有测试时，**『测试全绿』不是安全信号** —— 它只说明没有测试覆盖到这里。改了字段之后必须显式说明：哪些路径没有测试覆盖、人工验证了什么。",
+      "why": "绿色的 CI 是最强的心理暗示。当它覆盖不到最危险的那一层时，它的作用是负的。",
+      "paths": [
+        "internal/repo/**",
+        "internal/repository/**",
+        "internal/dao/**",
+        "internal/model/**",
+        "internal/store/**",
+        "**/repository/**",
+        "**/mapper/**"
+      ],
+      "timing": [
+        "session_start",
+        "stop"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "path_only"
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "本次改到了仓储层。在交付说明里写清：覆盖率缺口在哪、人工验证了什么。",
+      "tags": [
+        "测试",
+        "覆盖率",
+        "仓储",
+        "验证"
+      ],
+      "enabled": true
+    }
+  ]
+}

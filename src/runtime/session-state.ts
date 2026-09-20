@@ -17,23 +17,44 @@
  * ── 为什么放 $HOME 而不是仓库里 ──
  * 见 paths.ts 的说明。另外两个进程的 cwd 可能不同（hook 的仓库根来自 stdin 的
  * cwd 字段，MCP 的来自 process.cwd()），用 $HOME 才是两边都能算出同一个位置的锚点。
+ *
+ * ── 为什么"按文件记"的状态必须带仓库维度 ──
+ * 状态放在仓库外面，key 又是**仓库相对路径**，那么两个仓库都有 `src/index.ts` 时
+ * key 就撞了：查过 A 仓那个，写 B 仓那个就被放行。守卫方向性地从"多拦"变成"漏拦"，
+ * 而这个方向的失败是不能接受的。所以凡是 key 里含路径或含"本仓知识"的状态，
+ * 一律用 `repoId(repoDir):xxx` 做 key。
+ *
+ * ── 哪些状态**不带**仓库维度，以及为什么 ──
+ * `toolCalls` / `consecutiveFail` / `repeatCount` / `evidence` / `stopNotices`
+ * 回答的是"这个 agent 在这一轮里的行为"，不是"这个仓怎么了"。agent 连续失败 3 次、
+ * 反复调同一个工具，是**会话级现象** —— 按仓拆开会让每个仓各自从 0 数起，
+ * L3 循环门直接失效。`countSessionFiles` 同理：范围预算管的是"这次任务涉及面有多宽"，
+ * 跨仓改 8 个文件仍然是 8 个文件的涉及面。
+ *
+ * 所以函数签名本身就是这份划分的文档：**带 repoDir 参数的是仓级状态，不带的是会话级**。
+ *
+ * ── 为什么用显式参数而不是进程级的"当前仓" ──
+ * 用一个 ambient 全局（像下面 sessionId 的 override 那样）确实能少改十几个签名，
+ * 但那等于把"一个进程只服务一个仓"钉进状态层 —— 而多仓演进的第一步恰恰是
+ * 「仓由这次动的文件决定，不由 cwd 决定」（见 docs/MULTI-REPO.md）。
+ * 到那时 ambient 值要在每个文件判定前重设一次，是最容易漏的那种写法。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { readJson, stateRoot } from './paths.js';
+import { readJson, repoId, stateRoot } from './paths.js';
 
 interface SessionState {
   version: number;
-  /** 查过影响面的文件（仓库相对路径）→ 查询时间戳 */
+  /** 查过影响面的文件。key = `<repoId>:<仓库相对路径>` → 查询时间戳 */
   queried: Record<string, number>;
-  /** 查过组件库目录的意图关键词。给"新建组件前必须先 lib search"用 */
+  /** 查过组件库目录的意图关键词。key = `<repoId>:<intent>`。给"新建组件前必须先 lib search"用 */
   libSearched: string[];
-  /** 查过高扇入热点。给「新建组件前必须先 hot」用 */
-  hotQueried: boolean;
-  /** 查过同类页骨架。给「新建页面前必须先 similar」用 */
+  /** 查过高扇入热点的仓（repoId 列表）。给「新建组件前必须先 hot」用 */
+  hotRepos: string[];
+  /** 查过同类页骨架的意图。key = `<repoId>:<intent>`。给「新建页面前必须先 similar」用 */
   similarSearched: string[];
-  /** 本会话改动过的文件。给 L1 范围门的 maxFiles 预算用 */
+  /** 本会话改动过的文件。元素 = `<repoId>:<仓库相对路径>`。给 L1 范围门的 maxFiles 预算用 */
   touchedFiles: string[];
   /**
    * L3 循环门的三个计数器。
@@ -42,7 +63,7 @@ interface SessionState {
    *   repeat  —— `工具名|入参指纹`，指纹取路径 + 命令的前 120 字符。
    *              不含全文内容，否则改一个字就成了"新调用"，计数永远到不了阈值
    *   fail    —— 只有一个 key（'_'），记的是**连续**失败数，成功即清零
-   *   fileFail—— `文件路径`，同一个文件反复写失败
+   *   fileFail—— `<repoId>:<文件路径>`，同一个文件反复写失败
    */
   repeatCount: Record<string, number>;
   consecutiveFail: number;
@@ -56,7 +77,35 @@ interface SessionState {
   updatedAt: number;
 }
 
-const STATE_VERSION = 2;
+/**
+ * 状态格式版本。
+ *
+ * 3 = key 带上了仓库维度。**版本不匹配时整份丢弃**（见 `load`）——
+ * 旧格式的 key 没有仓前缀，混着读会让"查过"判定时真时假，
+ * 那比丢掉状态坏得多。丢掉只是让守卫多拦一次，方向安全。
+ */
+const STATE_VERSION = 3;
+
+/**
+ * 仓级 key 的前缀。**写入、读取、反解都必须走它** ——
+ * 前缀在多处各算一遍的话，改一处漏一处会让"查过"判定静默失配
+ *（记的时候带前缀、读的时候不带 → 永远判成没查过，或者反过来永远放行）。
+ * 这个失配没有任何报错，只表现为守卫时松时紧。
+ */
+function scopePrefix(repoDir: string): string {
+  return `${repoId(repoDir)}:`;
+}
+
+/** 仓级状态的 key。repoId 里不含 `:`，所以第一个 `:` 就是分隔符 */
+function scopedKey(repoDir: string, suffix: string): string {
+  return `${scopePrefix(repoDir)}${suffix}`;
+}
+
+/** 从仓级 key 里取回后半段。不属于这个仓就返回 null */
+function unscope(repoDir: string, key: string): string | null {
+  const prefix = scopePrefix(repoDir);
+  return key.startsWith(prefix) ? key.slice(prefix.length) : null;
+}
 
 /**
  * 显式设定的会话 id。
@@ -99,8 +148,30 @@ function stateFile(sid: string): string {
   return path.join(stateRoot(), 'state', `${sid}.json`);
 }
 
+function emptyState(): SessionState {
+  return {
+    version: STATE_VERSION,
+    queried: {},
+    libSearched: [],
+    similarSearched: [],
+    hotRepos: [],
+    touchedFiles: [],
+    repeatCount: {},
+    consecutiveFail: 0,
+    fileWriteFail: {},
+    toolCalls: 0,
+    evidence: [],
+    stopNotices: [],
+    updatedAt: 0,
+  };
+}
+
 function load(sid: string): SessionState {
   const raw = readJson<Partial<SessionState>>(stateFile(sid));
+  // 旧格式的 key 没有仓前缀，逐字段容错地读进来会让"查过"判定时真时假。
+  // 整份丢弃，让守卫多拦一次 —— 这个方向的失败是安全的
+  if (!raw || raw.version !== STATE_VERSION) return emptyState();
+
   const arr = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   const counts = (v: unknown): Record<string, number> => {
@@ -113,18 +184,18 @@ function load(sid: string): SessionState {
   };
   return {
     version: STATE_VERSION,
-    queried: raw?.queried && typeof raw.queried === 'object' ? (raw.queried as Record<string, number>) : {},
-    libSearched: arr(raw?.libSearched),
-    similarSearched: arr(raw?.similarSearched),
-    hotQueried: raw?.hotQueried === true,
-    touchedFiles: arr(raw?.touchedFiles),
-    repeatCount: counts(raw?.repeatCount),
-    consecutiveFail: typeof raw?.consecutiveFail === 'number' ? raw.consecutiveFail : 0,
-    fileWriteFail: counts(raw?.fileWriteFail),
-    toolCalls: typeof raw?.toolCalls === 'number' ? raw.toolCalls : 0,
-    evidence: arr(raw?.evidence),
-    stopNotices: arr(raw?.stopNotices),
-    updatedAt: typeof raw?.updatedAt === 'number' ? raw.updatedAt : 0,
+    queried: raw.queried && typeof raw.queried === 'object' ? (raw.queried as Record<string, number>) : {},
+    libSearched: arr(raw.libSearched),
+    similarSearched: arr(raw.similarSearched),
+    hotRepos: arr(raw.hotRepos),
+    touchedFiles: arr(raw.touchedFiles),
+    repeatCount: counts(raw.repeatCount),
+    consecutiveFail: typeof raw.consecutiveFail === 'number' ? raw.consecutiveFail : 0,
+    fileWriteFail: counts(raw.fileWriteFail),
+    toolCalls: typeof raw.toolCalls === 'number' ? raw.toolCalls : 0,
+    evidence: arr(raw.evidence),
+    stopNotices: arr(raw.stopNotices),
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : 0,
   };
 }
 
@@ -140,79 +211,109 @@ function save(sid: string, st: SessionState): void {
 }
 
 /** 记下"查过这个文件的影响面" */
-export function recordQueried(rel: string): void {
+export function recordQueried(repoDir: string, rel: string): void {
   if (!rel) return;
   const sid = sessionId();
   const st = load(sid);
-  st.queried[rel] = Date.now();
+  st.queried[scopedKey(repoDir, rel)] = Date.now();
   save(sid, st);
 }
 
 /** 这个文件在本会话查过影响面吗 */
-export function hasQueried(rel: string): boolean {
+export function hasQueried(repoDir: string, rel: string): boolean {
   if (!rel) return false;
-  return Object.prototype.hasOwnProperty.call(load(sessionId()).queried, rel);
+  return Object.prototype.hasOwnProperty.call(load(sessionId()).queried, scopedKey(repoDir, rel));
 }
 
 /** 记下"查过组件库目录" */
-export function recordLibSearch(intent: string): void {
+export function recordLibSearch(repoDir: string, intent: string): void {
   const sid = sessionId();
   const st = load(sid);
-  if (!st.libSearched.includes(intent)) st.libSearched.push(intent);
+  const key = scopedKey(repoDir, intent);
+  if (!st.libSearched.includes(key)) st.libSearched.push(key);
   save(sid, st);
 }
 
 /** 记下"查过同类页骨架" */
-export function recordSimilarSearch(intent: string): void {
+export function recordSimilarSearch(repoDir: string, intent: string): void {
   const sid = sessionId();
   const st = load(sid);
-  if (!st.similarSearched.includes(intent)) st.similarSearched.push(intent);
+  const key = scopedKey(repoDir, intent);
+  if (!st.similarSearched.includes(key)) st.similarSearched.push(key);
   save(sid, st);
 }
 
-export function hasLibSearched(): boolean {
-  return load(sessionId()).libSearched.length > 0;
+/**
+ * 本仓查过组件库吗。
+ *
+ * 按仓记而不按会话记：lib / similar 回答的是"**本仓**的组件库里有什么"、
+ * "**本仓**这类页面怎么写的"（见 graph-enforce.ts 顶部）。这本来就是仓级知识，
+ * 拿 A 仓的答案去放行 B 仓的新建，等于让模型照着另一个仓的约定写。
+ */
+export function hasLibSearched(repoDir: string): boolean {
+  const prefix = scopePrefix(repoDir);
+  return load(sessionId()).libSearched.some((k) => k.startsWith(prefix));
 }
 
-export function hasSimilarSearched(): boolean {
-  return load(sessionId()).similarSearched.length > 0;
+export function hasSimilarSearched(repoDir: string): boolean {
+  const prefix = scopePrefix(repoDir);
+  return load(sessionId()).similarSearched.some((k) => k.startsWith(prefix));
 }
 
 /**
- * 查过高扇入热点吗。
+ * 本仓查过高扇入热点吗。
  *
  * 与 `hasSimilarSearched` 分开记是刻意的：hot 回答「别改我 / 别重造」，
  * similar 回答「照这个做」。拿一个冒充另一个，模型会拿着高扇入清单
  * 去当同类实现抄 —— 那是错的。
  */
-export function hasHotQueried(): boolean {
-  return load(sessionId()).hotQueried;
+export function hasHotQueried(repoDir: string): boolean {
+  return load(sessionId()).hotRepos.includes(repoId(repoDir));
 }
 
-export function recordHotQuery(): void {
+export function recordHotQuery(repoDir: string): void {
   const sid = sessionId();
   const st = load(sid);
-  if (st.hotQueried) return;
-  st.hotQueried = true;
+  const id = repoId(repoDir);
+  if (st.hotRepos.includes(id)) return;
+  st.hotRepos.push(id);
   save(sid, st);
 }
 
 // ══════════════════ L1 范围门：会话内改过哪些文件 ══════════════════
 
-export function sessionTouchedFiles(): string[] {
-  return load(sessionId()).touchedFiles;
+/**
+ * 本仓改动过的文件（仓库相对路径）。
+ *
+ * 只给"这个文件改过没有"的成员判定用，所以必须按仓过滤 ——
+ * 预算的**总数**要的是跨仓总和，那个走 `countSessionFiles`。
+ */
+export function sessionTouchedFiles(repoDir: string): string[] {
+  const out: string[] = [];
+  for (const key of load(sessionId()).touchedFiles) {
+    const rel = unscope(repoDir, key);
+    if (rel) out.push(rel);
+  }
+  return out;
 }
 
+/**
+ * 本会话改动过的文件总数（**跨仓求和**）。
+ *
+ * 范围预算管的是"这次任务涉及面有多宽"。跨两个仓各改 4 个文件，
+ * 涉及面就是 8 个文件，按仓拆开各自从 0 数起会让预算形同虚设。
+ */
 export function countSessionFiles(): number {
   return load(sessionId()).touchedFiles.length;
 }
 
-export function recordSessionFile(rel: string): void {
+export function recordSessionFile(repoDir: string, rel: string): void {
   if (!rel) return;
   const sid = sessionId();
   const st = load(sid);
-  if (st.touchedFiles.includes(rel)) return;
-  st.touchedFiles.push(rel);
+  const key = scopedKey(repoDir, rel);
+  if (st.touchedFiles.includes(key)) return;
+  st.touchedFiles.push(key);
   save(sid, st);
 }
 
@@ -224,6 +325,9 @@ export function recordSessionFile(rel: string): void {
  * 指纹只取路径与命令的前 120 字符，**不含全文内容**。
  * 含全文的话，模型改一个字就成了"新调用"，重复计数永远到不了阈值 ——
  * 而"改一个字再试一次"恰恰是它卡住时最典型的行为。
+ *
+ * 不带仓库维度：多仓下两个仓的同名文件会合并计数，于是循环门更早触发。
+ * "反复在同一个相对路径上打转"本身就是卡住的信号，这个方向偏严，是安全的。
  */
 export function bumpRepeat(toolName: string, fingerprint: string): number {
   const sid = sessionId();
@@ -262,16 +366,17 @@ export function consecutiveFailCount(): number {
 }
 
 /** 同一个文件写失败：+1 并返回新值 */
-export function bumpFileWriteFail(rel: string): number {
+export function bumpFileWriteFail(repoDir: string, rel: string): number {
   const sid = sessionId();
   const st = load(sid);
-  st.fileWriteFail[rel] = (st.fileWriteFail[rel] ?? 0) + 1;
+  const key = scopedKey(repoDir, rel);
+  st.fileWriteFail[key] = (st.fileWriteFail[key] ?? 0) + 1;
   save(sid, st);
-  return st.fileWriteFail[rel];
+  return st.fileWriteFail[key];
 }
 
-export function fileWriteFailCount(rel: string): number {
-  return load(sessionId()).fileWriteFail[rel] ?? 0;
+export function fileWriteFailCount(repoDir: string, rel: string): number {
+  return load(sessionId()).fileWriteFail[scopedKey(repoDir, rel)] ?? 0;
 }
 
 export function toolCallCount(): number {

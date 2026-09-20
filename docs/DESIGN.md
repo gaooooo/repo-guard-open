@@ -540,7 +540,7 @@ npm run check          # typecheck + build + verify-hooks + verify-parity
 
 ### 6.3 两道验收闸门
 
-**`bin/verify-hooks.mjs`（20 条）** —— 自建临时 git 仓库，按宿主契约给钩子灌 JSON。不碰任何真实仓库。
+**`bin/verify-hooks.mjs`（59 条）** —— 自建临时 git 仓库，按宿主契约给钩子灌 JSON。不碰任何真实仓库。
 
 证明两件事：**拦得对**，而且**不误伤**。第二件比第一件重要 —— 误伤会让人直接卸载。
 
@@ -552,7 +552,7 @@ npm run check          # typecheck + build + verify-hooks + verify-parity
 | fail-open | F1 F2 | 没配置时不拦、且明确提示守卫未生效 |
 | 坏输入不崩 | E1 E2 | 空输入、缺 `tool_input` |
 
-**`build/verify-parity.mjs`（66 条）** —— 新旧两份产物喂同样输入，逐字节比 stdout + 退出码。
+**`build/verify-parity.mjs`（84 条）** —— 新旧两份产物喂同样输入，逐字节比 stdout + 退出码。
 
 为什么需要它：适配层没有源码，是反推重写的，而 `verify-hooks` 只校验 verdict 三态 —— 拦对了但文案、路径归一、退出码、JSON 字段漂了它一概看不见。
 
@@ -563,9 +563,9 @@ fixture 必须**真的触发有数据的分支**。第一版 fixture 推不出�
 - `web`：React + TS，路由表写成**变量声明的直接数组字面量**（包在 `createBrowserRouter(...)` 里分析器扫不到），页面里放 `Table` / `Pagination` / `Input` / `Form` / `Modal` 让页面指纹打出标签，两条 API 调用喂契约反推，外加超长文件、同名前缀目录、循环依赖
 - `go`：go.mod + gin 路由 + handler → service → common 三层
 
-现状：**verify-hooks 20/20，verify-parity 65/69 逐字节一致 + 4 个已登记的有意偏差，0 个未解释差异。**
+现状：**verify-hooks 59/59，verify-parity 76/84 逐字节一致 + 8 个已登记的有意偏差，0 个未解释差异。**
 
-### 6.4 四个有意偏差
+### 6.4 已登记的有意偏差
 
 parity 的闸门允许登记"明知不同且有意保留"的用例，但每条必须写清差在哪、为什么不改回去。
 这个清单是给下一个人看的 —— 没有它，后来者看到 DIFF 只会以为是自己写坏了。
@@ -751,6 +751,8 @@ REPO_GUARD_DEBUG / DEBUG                   调试开关
 - 不改用户的 lint 配置 —— `init` 只把建议片段打出来让人自己贴。
 - 不替宿主做权限与沙箱。
 - 不把图谱进 git。
+- **当前只守一个仓**。多仓（一个会话挂多个仓、微服务之间的跨仓影响面）
+  的边界、演进支点与落地分级见 [MULTI-REPO.md](./MULTI-REPO.md)。
 
 ### 9.3 关键决策记录
 
@@ -775,14 +777,15 @@ REPO_GUARD_DEBUG / DEBUG                   调试开关
 | P3 | 全控制点骨架 + `.codebuddy/guard/` 配置 | `plugin validate` 通过、空配置零行为变化 | ✅ |
 | P4 | 七道门接进运行时 | 每道门有独立用例，且阶段 C 证明零行为变化 | ✅ |
 | P5 | 真机验证 + 治理总览 + 分发物料 | `--plugin-dir` 端到端跑通 | ✅ |
+| P6 | 多仓（设计） | 见 [MULTI-REPO.md](./MULTI-REPO.md)。已落地的只有会话状态的仓库维度（G3 用例钉住），其余待排 | 📋 |
 
 **当前验收状态**
 
 ```
 npm run check
   ✅ typecheck 干净
-  ✅ build 878 KB 单文件零依赖（含冒烟）
-  ✅ verify-hooks   58/58
+  ✅ build 880 KB 单文件零依赖（含冒烟）
+  ✅ verify-hooks   59/59
   ✅ verify-parity  76/84 逐字节 + 8 条已登记偏差 + MCP 长连接存活
 ```
 

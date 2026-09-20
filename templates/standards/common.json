@@ -1,0 +1,353 @@
+{
+  "_": [
+    "全端共用规范 —— 这些不是前端专属。后端、数据库、MQ、测试都要接，只换命令。",
+    "",
+    "── 这一端默认 on ──",
+    "`standards.json` 里 common 是 \"on\" 而不是 \"auto\"：它不依赖技术栈探测，",
+    "任何仓库都适用。",
+    "",
+    "── CM-LAYER-002 与 CM-FREEZE-001 是唯一两条已经在跑的硬拦 ──",
+    "它们不依赖本文件的 severity，判定分别来自：",
+    "  CM-LAYER-002 → `.codebuddy/repo-facts.json` 的 publicLayer（插件核心功能，关不掉）",
+    "  CM-FREEZE-001 → `.codebuddy/redlines.json` 的 no_refactor 与 guard/constraint/no-refactor.json",
+    "这里列出它们是为了让注入面里有正文 —— 被拦的时候模型要知道为什么。"
+  ],
+  "stack": "common",
+  "items": [
+    {
+      "id": "CM-CODE-001",
+      "title": "单文件超行数上限需拆分",
+      "body": "单文件超过本仓 lineLimit（默认 500 行）需要拆分，**按本仓已有的拆法拆** —— 不要自己发明一套目录结构。存量超长文件不强制动，新写的不许超。",
+      "why": "行数本身不是问题，问题是超长文件里一定藏着多个职责，改 A 会碰到 B。",
+      "timing": [
+        "prompt_submit"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "lint"
+      ],
+      "hint": "看同目录已有文件是怎么分的，照着分。lint 的 max-lines 才是这条的硬落点。",
+      "tags": [
+        "拆分",
+        "行数",
+        "体量"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-CODE-002",
+      "title": "不许新增循环依赖",
+      "body": "不许新增模块间的循环依赖。发现已有循环不要顺手解 —— 那是独立任务，先确认影响面。",
+      "why": "循环依赖会让构建顺序、初始化顺序变得不可预测，而且症状往往出现在无关的地方。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "lint",
+        "ci"
+      ],
+      "hint": "`repo-guard scan` 能列出本仓现有的循环依赖；硬落点是 import/no-cycle 或 golangci-lint。",
+      "tags": [
+        "循环依赖",
+        "import",
+        "依赖"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-CODE-003",
+      "title": "公共边界必须有显式类型",
+      "body": "跨模块的公共边界（导出函数、对外接口、公共组件 props）必须有显式类型声明。不许用宽类型绕过检查换取编译通过。",
+      "why": "宽类型把错误从编译期推到运行期，而运行期的报错点离真正的原因很远。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "lint"
+      ],
+      "tags": [
+        "类型",
+        "any",
+        "interface"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-LAYER-001",
+      "title": "依赖单向流动，禁止反向 import",
+      "body": "依赖只能单向流动。下层不许 import 上层，公共层不许 import 业务层。需要反向拿数据时用参数或回调传进来，不要为了省事加一条反向依赖。",
+      "why": "一条反向依赖会让整个分层失去意义，而且它通常不是有意加的 —— 是为了让某个 case 跑起来临时加的。",
+      "timing": [
+        "session_start",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "lint",
+        "plugin"
+      ],
+      "hint": "lint 的 import 限制规则是硬落点。别写成『目录建议』散文，那个没人执行。",
+      "tags": [
+        "分层",
+        "依赖",
+        "import",
+        "目录"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-LAYER-002",
+      "title": "改公共层已有文件前必须查影响面",
+      "body": "公共层目录下**已有**的文件，改之前必须先调 impact 工具确认影响面。受影响入口 ≥ 5 时只允许新增可选参数，不许改签名、不许改默认行为。单页/单业务逻辑不准塞进公共层。",
+      "why": "公共层的改动会波及所有调用方，而调用方的作者不在这次 review 里。",
+      "paths": [
+        "__PUBLIC_LAYER__"
+      ],
+      "timing": [
+        "pre_write"
+      ],
+      "severity": "block",
+      "check": {
+        "kind": "require_tool",
+        "tool": "impact"
+      },
+      "landing": [
+        "plugin"
+      ],
+      "hint": "跑 impact 看受影响入口；注意输出里的盲区清单 —— 影响面为 0 不等于可以删。",
+      "tags": [
+        "公共层",
+        "影响面",
+        "impact",
+        "重构"
+      ],
+      "enabled": true,
+      "confirmed": true,
+      "_note": [
+        "paths 的 __PUBLIC_LAYER__ 是占位符，加载时展开为 repo-facts.publicLayer；",
+        "展开为空（没跑过 init --write）时这条会被自动关闭，不会变成全仓生效。",
+        "",
+        "timing **刻意不含 session_start**：公共层清单与这条纪律已经由插件核心功能",
+        "在会话开始时注入了（见 gates/inject.ts 的 guardSegment）。再注一遍是重复，",
+        "而重复的约束会让注入面显得冗长、每条的分量都被稀释。",
+        "",
+        "判定同样由核心功能承担，这里的 require_tool 只是让它在 standards 清单里可见、",
+        "可被项目层调整 paths。"
+      ]
+    },
+    {
+      "id": "CM-VCS-001",
+      "title": "脏代码进不了主干",
+      "body": "提交前必须过：格式化、lint、类型检查、提交信息规范。主干受保护，改公共层要走 CODEOWNERS。这四件套（pre-commit / commitlint / CODEOWNERS / CI）缺一条就会漏。",
+      "why": "只靠模型自觉是概率问题；卡点是确定的。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "ci",
+        "permissions"
+      ],
+      "hint": "要硬拦 commit 请在宿主 .codebuddy/settings.json 写 \"ask\": [\"Bash(git commit:*)\"]，不要指望插件拦 —— commit 是人随时会敲的动作。",
+      "tags": [
+        "提交",
+        "commit",
+        "分支",
+        "mr",
+        "merge request"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-VERIFY-001",
+      "title": "没跑本仓校验命令不能交，本地绿不算",
+      "body": "交付之前必须跑过本仓的校验命令（lint / build / test）。**本地绿不算最终证据，CI 才是。** 没跑过就说没跑过，不许写『已测』三个字糊过去。覆盖率有缺口就写清缺在哪。",
+      "why": "『已测』是最贵的三个字：它让 reviewer 以为验证过了，于是跳过了自己的检查。",
+      "timing": [
+        "session_start",
+        "stop"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "require_evidence",
+        "commands": [
+          "lint",
+          "build",
+          "test",
+          "vet",
+          "tsc",
+          "make verify"
+        ]
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "本会话没有检测到校验命令的执行记录。自定义脚本名（如 make verify）要加进 guard/process/delivery.json 的 evidencePatterns，否则跑了也认不出来。",
+      "tags": [
+        "测试",
+        "验证",
+        "构建",
+        "lint",
+        "已测"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-SEC-001",
+      "title": "密钥不进仓、不打日志",
+      "body": "密钥、token、证书、连接串一律不进仓库、不打进日志、不写进注释。需要凭证时读环境变量或配置中心。测试用的假凭证也要用明显假的值，不要粘真实值改两位。",
+      "why": "进过 git 的密钥即使删掉也还在历史里。",
+      "timing": [
+        "session_start",
+        "post_write"
+      ],
+      "severity": "remind",
+      "check": {
+        "kind": "content_regex",
+        "patterns": [
+          {
+            "pattern": "(secret|token|password|passwd|api_?key|access_?key)\\s*[:=]\\s*[\"'][^\"'$\\{][^\"']{7,}[\"']",
+            "flags": "i",
+            "message": "这里像是写死了一个凭证。改成读环境变量或配置。"
+          },
+          {
+            "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+            "message": "私钥不许进仓库。"
+          }
+        ]
+      },
+      "landing": [
+        "plugin",
+        "ci"
+      ],
+      "hint": "硬落点是 CI 的 secret scan + pre-commit 钩子；插件这里只是弱正则提醒，一定有漏。",
+      "tags": [
+        "密钥",
+        "secret",
+        "token",
+        "凭证",
+        "安全"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-SEC-002",
+      "title": "无授权不碰生产",
+      "body": "不许在没有明确授权的情况下执行触达生产环境的命令（集群操作、线上数据库、发布、回滚、改线上配置）。拿不到授权就停下来，把要执行的命令原文交给人。",
+      "why": "生产操作不可逆，而模型对『这是不是生产』的判断依赖环境变量与上下文 —— 两者都可能是错的。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "ask",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "permissions"
+      ],
+      "hint": "硬落点在宿主 .codebuddy/settings.json：\"ask\": [\"Bash(kubectl:*)\", \"Bash(mysql:*)\", \"Bash(aws:*)\"]。插件的 deny 是黑盒，用户在 /permissions 面板里看不到，不该由它承担安全边界。",
+      "tags": [
+        "生产",
+        "部署",
+        "发布",
+        "kubectl",
+        "线上"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-FREEZE-001",
+      "title": "看起来脏的历史代码默认不动",
+      "body": "『看起来脏』的历史代码默认不动。只有明确的重构任务才允许动，而且动之前必须先查影响面。禁改清单里的路径一律不碰 —— 清单之外看起来也脏的，同样别顺手改。",
+      "why": "那 200 行 if-else 里往往有 3 个针对具体客户的 hack，没有测试也没有注释。改成策略模式『更清晰了』，然后线上炸。",
+      "timing": [
+        "session_start",
+        "prompt_submit"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin"
+      ],
+      "hint": "禁改清单见 .codebuddy/redlines.json 的 no_refactor 与 guard/constraint/no-refactor.json。要动请先说明为什么必须动，并跑 impact 确认影响面。",
+      "tags": [
+        "重构",
+        "历史代码",
+        "清理",
+        "优化"
+      ],
+      "enabled": true,
+      "_note": "硬拦由 redlines.no_refactor（路径命中即拦）承担，不在这里重复声明 paths —— 写两份清单必然对不上。这一条只提供注入正文，让模型被拦时知道为什么。"
+    },
+    {
+      "id": "CM-HONEST-001",
+      "title": "不编造需求与文档里没有的字段",
+      "body": "接口字段必须来自 trace 结果或真实类型定义。不许凭字段名语义猜一个，不许把『应该有』当成『有』。文档里没写的字段就是没有 —— 需要它就去问，不要先写上再说。",
+      "why": "编出来的字段名在联调时才会暴露，而那时改动成本已经放大了十倍。",
+      "timing": [
+        "session_start"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "plugin",
+        "human"
+      ],
+      "hint": "用 `repo-guard trace <路径>` 反推真实出入参；contracts 命令给的类型草稿必须人工 review，不能当已有类型用。",
+      "tags": [
+        "字段",
+        "接口",
+        "契约",
+        "编造"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "CM-HONEST-002",
+      "title": "需求与实现矛盾时停下来问",
+      "body": "发现需求描述与现有实现矛盾、或需求本身前后不一致时，**停下来问人，不要自己挑一个继续做**。同样的：要改数据库 schema、要删除大段代码、拿不准影响范围时，都先停。",
+      "why": "模型遇到矛盾时的默认行为是挑一个继续做，而那通常是错的那个 —— 因为矛盾本身说明提需求的人也没想清楚。",
+      "timing": [
+        "session_start",
+        "prompt_submit"
+      ],
+      "severity": "inject",
+      "check": {
+        "kind": "none"
+      },
+      "landing": [
+        "human"
+      ],
+      "tags": [
+        "矛盾",
+        "需求",
+        "拿不准",
+        "停下"
+      ],
+      "enabled": true
+    }
+  ]
+}

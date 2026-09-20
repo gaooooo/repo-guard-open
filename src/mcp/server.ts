@@ -172,14 +172,14 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const handle = await getGraph(repoDir);
       // 记状态必须在渲染之前 —— 渲染抛异常时状态也该记上，
       // 否则模型明明查了却还是被拦，会陷入死循环
-      recordQueried(rel);
+      recordQueried(repoDir, rel);
       record('graph_query', repoDir, { file: rel, detail: 'impact' });
       return renderImpactCli(handle.graph, rel);
     }
 
     case 'hot': {
       const handle = await getGraph(repoDir);
-      recordHotQuery();
+      recordHotQuery(repoDir);
       record('graph_query', repoDir, { detail: 'hot' });
       return renderHotMcp(handle.graph, num(args.limit, 10));
     }
@@ -238,7 +238,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const intent = str(args.intent);
       if (!intent) return '缺少 intent。';
       const handle = await getGraph(repoDir);
-      recordSimilarSearch(intent);
+      recordSimilarSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'similar' });
       return renderSimilar(handle.graph, { intent, limit: num(args.limit, 3) }, ctxOf(repoDir, handle));
     }
@@ -248,7 +248,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       if (!intent) return '缺少 intent。';
       const facts = readFacts(repoDir);
       const info = loadLibrary(repoDir, facts?.componentLibrary ?? null);
-      recordLibSearch(intent);
+      recordLibSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'lib_search' });
       if (!info.pkg) {
         return '本仓没有识别到 UI 组件库。如果确实有，可以在 .codebuddy/repo-facts.json 里手动指定 componentLibrary。';

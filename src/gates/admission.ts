@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { checkToolCall } from '../engine/policy-engine.js';
-import type { KnowledgeSnapshot, PolicyVerdict } from '../engine/types.js';
+import type { KnowledgeSnapshot, PolicyRule, PolicyVerdict } from '../engine/types.js';
 import { normalizePrefix } from '../runtime/repo-facts.js';
 import {
   countSessionFiles,
@@ -123,6 +123,15 @@ const PASS: AdmissionVerdict = { blocked: false };
  * guard 配置里的 `constraint/no-refactor.json` 会**并进快照**再交给引擎 ——
  * 引擎的 `checkToolCall` 已经实现了 no_refactor 的路径级硬拦，
  * 在外面另写一套等于两份判定逻辑，迟早不一致。
+ *
+ * ── `extraRules` 为什么能绕过 L1 总闸 ──
+ * 它装的是 `.codebuddy/standards/` 编译出来的 block 级规范。那套配置有自己的
+ * 总闸（`standards.json` 的 `enabled` + `maxSeverity`），把 `maxSeverity` 调到
+ * `block` 已经是极其明确的表态 —— 再要求同时打开 guard 的 L1，就成了两套开关，
+ * 人会困惑「我开了为什么不拦」。配置集中是这套设计的硬要求。
+ *
+ * 所以两类规则各自受自己的闸门控制：L1 关着时快照里的手写红线不判，
+ * 但 standards 的 block 仍判。
  */
 export function judgeRedline(
   repoDir: string,
@@ -130,8 +139,10 @@ export function judgeRedline(
   cfg: GuardConfig,
   rel: string,
   toolInput: WriteToolInput,
+  extraRules: PolicyRule[] = [],
 ): AdmissionVerdict {
-  if (!cfg.gates.L1_admission) return PASS;
+  const l1 = cfg.gates.L1_admission;
+  if (!l1 && !extraRules.length) return PASS;
 
   let before: string | null = null;
   try {
@@ -142,15 +153,20 @@ export function judgeRedline(
   const after = computeAfter(before, toolInput);
 
   // 把 guard 的禁改清单并进快照。engine 只认 snapshot.policy.no_refactor
-  const merged: KnowledgeSnapshot = {
-    ...snapshot,
-    ok: snapshot.ok || cfg.noRefactor.length > 0,
-    policy: {
-      ...snapshot.policy,
-      no_refactor: [
+  const redLines = [...(l1 ? snapshot.policy.red_lines : []), ...extraRules];
+  const noRefactor = l1
+    ? [
         ...snapshot.policy.no_refactor,
         ...cfg.noRefactor.map((e) => ({ path: e.path, reason: e.reason, confirmed: e.confirmed })),
-      ],
+      ]
+    : [];
+  const merged: KnowledgeSnapshot = {
+    ...snapshot,
+    ok: (l1 && snapshot.ok) || redLines.length > 0 || noRefactor.length > 0,
+    policy: {
+      ...snapshot.policy,
+      red_lines: redLines,
+      no_refactor: noRefactor,
     },
   };
 
@@ -205,7 +221,11 @@ export function judgeRedline(
     verdict.layer === 'structural_delete'
       ? '（判据：对比改动前后的文件内容，受保护标识符出现次数减少了。这是硬证据。）'
       : `（判据层：${verdict.layer}）`,
-    '如果确实该改，请先和维护者确认，然后更新 .codebuddy/redlines.json 里的这条规则 —— 不要绕过它。',
+    // 指路必须指对文件：`STD-` 前缀的规则是从 .codebuddy/standards/ 编译来的，
+    // 让模型去改 redlines.json 会让它改错地方 —— 然后以为改了没生效
+    r?.id?.startsWith('STD-')
+      ? '如果确实该改，请先和维护者确认，然后更新 .codebuddy/standards/ 里对应的那条规范（去掉受保护符号或关闭该条目）—— 不要绕过它。'
+      : '如果确实该改，请先和维护者确认，然后更新 .codebuddy/redlines.json 里的这条规则 —— 不要绕过它。',
   );
   return { blocked: true, reason: lines.join('\n'), kind: 'redline', ruleId: r?.id };
 }
@@ -246,7 +266,7 @@ export function judgeScope(
   if (budget && budget > 0) {
     // 已经改过的文件不再计数 —— 预算管的是"涉及面有多宽"，不是"写了多少次"
     const already = countSessionFiles();
-    const isNew = !hasTouched(rel);
+    const isNew = !hasTouched(repoDir, rel);
     if (isNew && already >= budget) {
       return {
         blocked: true,
@@ -262,13 +282,13 @@ export function judgeScope(
 }
 
 /** 记下这次改动涉及的文件（范围门预算用）。放行之后才记 */
-export function noteTouched(rel: string): void {
-  recordSessionFile(rel);
-  touchedCache().add(rel);
+export function noteTouched(repoDir: string, rel: string): void {
+  recordSessionFile(repoDir, rel);
+  touchedCache(repoDir).add(rel);
 }
 
-function hasTouched(rel: string): boolean {
-  return touchedCache().has(rel);
+function hasTouched(repoDir: string, rel: string): boolean {
+  return touchedCache(repoDir).has(rel);
 }
 
 /**
@@ -276,9 +296,10 @@ function hasTouched(rel: string): boolean {
  *
  * 每个 hook 是一次性子进程，所以"本进程"就是"这一次判定"——
  * 缓存在这里只是避免同一次判定里反复读同一个状态文件，不存在跨调用失效问题。
+ * 同理，一次判定只涉及一个仓，所以不必按 repoDir 分桶。
  */
 let touched: Set<string> | null = null;
-function touchedCache(): Set<string> {
-  if (!touched) touched = new Set(sessionTouchedFiles());
+function touchedCache(repoDir: string): Set<string> {
+  if (!touched) touched = new Set(sessionTouchedFiles(repoDir));
   return touched;
 }

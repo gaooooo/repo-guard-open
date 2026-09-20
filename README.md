@@ -59,7 +59,29 @@ repo-guard init --write
 
 **人写意图，机器验完整性。**
 
-### 4. 重开会话
+### 4. （可选）铺研发规范
+
+```bash
+repo-guard standards init --write
+```
+
+生成 `.codebuddy/standards/`：五端（L0 跨端契约 / 全端共用 / 前端 / 后端 / 数据库 / 消息队列）约 45 条规范。
+
+两层：**全局层**在插件里（`templates/standards/`，改它 = 定制部门模板），**项目层**在仓库里（按条目 `id` 字段级覆盖，要进 git）。
+
+`maxSeverity` 默认 `remind` —— **铺完不会有任何新的拦截**。想开硬拦先看 `repo-guard governance` 的数据。
+
+```bash
+repo-guard standards list                      # 生效清单：哪些端、哪一层、实际强度
+repo-guard standards check src/views/a.tsx     # 自查：这个文件违反了什么
+repo-guard standards audit                     # 体检：有没有守空气、有没有被静默降级
+```
+
+⚠️ **纯前端仓要把 `standards.json` 的 `stacks.database` 与 `stacks.message-queue` 设成 `off`。**「字段」一词在前端指接口出入参、在数据库那边指 schema，两套门禁同时触发会导致前端改个接口被要求写 migration。
+
+规范内容清单见 [`docs/STANDARDS.md`](docs/STANDARDS.md)，落点机制见 [`docs/CONTROL-POINTS.md` §14](docs/CONTROL-POINTS.md)。
+
+### 5. 重开会话
 
 插件在会话启动时加载，**必须重开会话才生效**。
 
@@ -79,8 +101,14 @@ repo-guard init --write
 | `lib search <要什么>` | 本仓 UI 组件库里有没有现成的 |
 | `contracts [接口]` | 反推导出接口类型草稿（**必须人工 review，不能当已有类型**） |
 | `audit` | **红线体检**：规则在不在守空气、paths 有没有后门、evidence 还准不准 |
+| `redlines init [--write]` | 把部门红线模板铺进 `.codebuddy/redlines.json` |
+| `doctor` | **配置体检**：JSON 坏没坏、条目会不会静默失效、注入配额还剩多少 |
 | `governance` | 治理留痕报表：这些门在做有用功还是在骚扰人 |
 | `guard init [--write]` | 铺开协作全景七道门的配置骨架（全部默认关，尚未接进运行时） |
+| `standards list [--stack <端>]` | 研发规范生效清单：哪些端启用、来自哪一层、实际强度是多少 |
+| `standards check <文件…>` | **规范自查**：这些文件违反了什么。人审/硬拦级非零退出，可挂 CI |
+| `standards init [--write]` | 铺开五端研发规范模板（默认只提醒，不拦） |
+| `standards audit` | **规范体检**：有没有守空气、有没有被静默降级、项目层放宽有没有留理由 |
 | `mcp` | 作为 stdio MCP 给 AI 用（宿主自动拉起，不用手动跑） |
 | `hook <name>` | 插件钩子（宿主调用） |
 
@@ -103,8 +131,12 @@ repo-guard scan || exit 1
 | 写完的文件超过行数上限 | 提醒，不拒绝 |
 | 用 `sed`、重定向等写公共层 | 提醒 + 计数，**不拒绝**（拦 shell 误伤率太高） |
 | 本仓还没跑过 `init` | **全部放行**，并在会话开始时说明守卫未生效 |
+| 写完的文件命中研发规范（色值 / `any` / 硬编码中文 / 裸 goroutine…） | 提醒，带行号，**不拒绝** |
+| 改动删除了规范声明的受保护字段 | 按 `maxSeverity` 决定。默认 `remind` = 只提醒 |
+| 本仓没铺 `.codebuddy/standards/` | 规范**完全不参与**运行时，插件行为与接入规范前逐字节相同 |
 
-最后一条是有意的：**没有配置就不拦**，绝不能因为工具没配好就把人挡在外面。
+最后两条是有意的：**没有配置就不拦**，绝不能因为工具没配好就把人挡在外面；
+规范也一样 —— 全局层跟着插件走，但只有仓库里铺了项目层才算团队表了态。
 
 ---
 
@@ -114,7 +146,7 @@ repo-guard scan || exit 1
 node bin/verify-hooks.mjs
 ```
 
-自建临时仓库跑 20 条用例，覆盖拦截、放行、路径归一、不误伤同名前缀目录、未配置时 fail-open、坏输入不崩。**不碰任何真实仓库。**
+自建临时仓库跑 59 条用例，覆盖拦截、放行、路径归一、不误伤同名前缀目录、未配置时 fail-open、坏输入不崩、七道门逐门验、空配置零行为变化。**不碰任何真实仓库。**
 
 改过钩子逻辑就跑一遍——证明「拦得对」容易，证明「不误伤」才是难的。
 
@@ -129,9 +161,28 @@ npm install
 npm run check      # 改完只需要跑这一条
 ```
 
-`npm run check` 按序做四件事，任一失败即停：类型检查 → 打包（含冒烟）→ 20 条钩子回归 → 69 条与旧产物的逐字节比对。
+`npm run check` 按序做四件事，任一失败即停：类型检查 → 打包（含冒烟）→ 59 条钩子回归 → 84 条与旧产物的逐字节比对。
 
 只跑 `npm run build` 不够 —— 它只保证产物能跑起来，不保证行为没漂。
+
+## 分发给其他部门
+
+```bash
+npm run pack        # = npm run check + 打包，产出 dist/repo-guard-<版本>/ 与 .tar.gz
+```
+
+包里**没有 `src/`、没有 `node_modules`**，引擎是 minify 过的单文件。所以判据很明确：
+**部门需要改的一切，都以 JSON / MD 的形式躺在 `templates/` 里。**
+
+部门解压后读 [`templates/CONFIG.md`](templates/CONFIG.md) —— 它列全了两层所有可填点。
+填完在包内跑自检，两条都不需要 npm：
+
+```bash
+bin/repo-guard doctor       # 配置体检
+node bin/verify-hooks.mjs   # 59 条钩子回归，确认填的红线没把正常写文件也拦了
+```
+
+部门可以在条目上写 `override_policy: "locked"` 限定各项目能改到什么程度。
 
 | 目录 | 是什么 |
 |---|---|
@@ -140,8 +191,10 @@ npm run check      # 改完只需要跑这一条
 | `src/cli/` `src/hooks/` `src/mcp/` | 三个入口。共用一个二进制，因为它们要共享图谱缓存与会话状态 |
 | `build/` | 构建脚本 + `baseline/`（改造前的产物，逐字节比对的黄金样本，**不能删**） |
 | `templates/guard/` | 协作全景七道门的配置骨架，全部默认关 |
+| `templates/standards/` | 五端研发规范标准模板（全局层），`src/standards/` 是它的加载与合并 |
 
-完整构建说明见 [`docs/BUILD.md`](docs/BUILD.md)，设计与控制点映射见 [`docs/DESIGN.md`](docs/DESIGN.md)。
+完整构建说明见 [`docs/BUILD.md`](docs/BUILD.md)，设计与控制点映射见 [`docs/DESIGN.md`](docs/DESIGN.md)，
+多仓演进（当前只守一个仓）见 [`docs/MULTI-REPO.md`](docs/MULTI-REPO.md)。
 
 ---
 

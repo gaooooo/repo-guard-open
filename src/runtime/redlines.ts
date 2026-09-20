@@ -16,6 +16,8 @@
  * 它是人的知识。而既然是人写的意图，就得跟代码走同一个 PR、能 review、能回溯，
  * 所以放仓库文件而不是某个数据库。代价是改完要提交才生效，换来的是零延迟锚定。
  */
+import path from 'node:path';
+
 import { configPath, readJson } from './paths.js';
 import {
   emptySnapshot,
@@ -35,6 +37,23 @@ interface RedlinesFile {
 
 export function redlinesFile(repoDir: string): string {
   return configPath(repoDir, 'redlines.json');
+}
+
+/**
+ * 部门级红线模板在插件里的位置。
+ *
+ * ⚠️ **它不参与运行时加载。** `loadRedlines` 与 `hasRedlines` 只看项目层，
+ * 这个函数只被 `redlines init` 用来做一次性拷贝。
+ *
+ * 为什么不做成两层合并（三条理由写在 templates/redlines.json 的 `_` 注释里）：
+ * 简短版是 —— 全局层一旦参与，没写过红线的仓库会突然多出一段 SessionStart 注入，
+ * 而 `audit` 的「未配置」退出码也会从 2 变成 0。那违反「空配置零行为变化」。
+ *
+ * `__dirname` 在打包后的 CJS 产物里指向 `bin/`，所以往上一级找 `templates/`，
+ * 与 `standardsTemplateDir()` / `gates/config.ts` 的 `templateDir()` 同构。
+ */
+export function redlinesTemplateFile(): string {
+  return path.resolve(__dirname, '..', 'templates', 'redlines.json');
 }
 
 export function hasRedlines(repoDir: string): boolean {

@@ -61,7 +61,7 @@ export function judge(
     publicPrefix: facts ? inPublicLayer(facts, rel) : null,
     exists,
     rules: activeRules(snapshot).filter((r) => ruleAppliesToPath(r, rel)),
-    queried: hasQueried(rel),
+    queried: hasQueried(repoDir, rel),
   };
 }
 

@@ -17,11 +17,14 @@
  * 所以这三条**必须由人显式配 pathPatterns 才生效**，不做目录名的内置猜测。
  * 默认关。配置见 `.codebuddy/guard/process/graph-enforce.json`。
  *
- * ── 为什么"查过"只按会话记、不按文件记 ──
+ * ── 为什么"查过"只按会话记、不按文件记，但要按仓记 ──
  * 与 impact 不同：impact 是"查这个文件的影响面"，必须按文件记
  *（查过 A 不能放行 B）。而 similar / hot / lib 回答的是"这类东西仓里怎么写的"，
  * 一次查询的结论对整批新建文件都适用。按文件记会让 AI 为每个新文件查一遍，
  * 拿到的还是同一个答案 —— 那是纯粹的骚扰。
+ *
+ * 但"**仓**里怎么写的"是仓级知识：拿 A 仓的组件库答案去放行 B 仓的新建，
+ * 等于让模型照着另一个仓的约定写。所以判据带 repoDir。
  */
 import { hasHotQueried, hasLibSearched, hasSimilarSearched } from '../runtime/session-state.js';
 import type { GuardConfig } from './config.js';
@@ -54,6 +57,7 @@ const PASS: EnforceVerdict = { blocked: false };
  *               这三条只管新建；改已有文件是 impact 那条的事。
  */
 export function judgeGraphEnforce(
+  repoDir: string,
   cfg: GuardConfig,
   rel: string,
   exists: boolean,
@@ -61,7 +65,11 @@ export function judgeGraphEnforce(
   if (!cfg.gates.L1_admission || exists) return PASS;
   const g = cfg.graphEnforce;
 
-  if (g.newPageSimilar.enabled && matches(g.newPageSimilar.pathPatterns, rel) && !hasSimilarSearched()) {
+  if (
+    g.newPageSimilar.enabled &&
+    matches(g.newPageSimilar.pathPatterns, rel) &&
+    !hasSimilarSearched(repoDir)
+  ) {
     return {
       blocked: true,
       kind: 'need_similar',
@@ -75,7 +83,11 @@ export function judgeGraphEnforce(
   // 注意判据是 hasHotQueried 而不是 hasSimilarSearched —— 这两个问题不一样：
   // hot 回答"别改我 / 别重造"，similar 回答"照这个做"。拿一个冒充另一个，
   // 模型会拿着高扇入清单去当同类实现抄，那是错的
-  if (g.newComponentHot.enabled && matches(g.newComponentHot.pathPatterns, rel) && !hasHotQueried()) {
+  if (
+    g.newComponentHot.enabled &&
+    matches(g.newComponentHot.pathPatterns, rel) &&
+    !hasHotQueried(repoDir)
+  ) {
     return {
       blocked: true,
       kind: 'need_hot',
@@ -88,7 +100,7 @@ export function judgeGraphEnforce(
   if (
     g.newComponentLibSearch.enabled &&
     matches(g.newComponentLibSearch.pathPatterns, rel) &&
-    !hasLibSearched()
+    !hasLibSearched(repoDir)
   ) {
     return {
       blocked: true,

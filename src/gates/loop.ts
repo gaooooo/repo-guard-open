@@ -57,6 +57,7 @@ const PASS: LoopVerdict = { blocked: false };
 
 /** 工具执行**之前**：看三个计数器有没有到阈值 */
 export function judgeLoop(
+  repoDir: string,
   cfg: GuardConfig,
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
@@ -94,7 +95,7 @@ export function judgeLoop(
   }
 
   if (rel) {
-    const fileFails = fileWriteFailCount(rel);
+    const fileFails = fileWriteFailCount(repoDir, rel);
     if (fileFails >= cfg.loop.sameFileWriteFailThreshold) {
       return {
         blocked: true,
@@ -112,6 +113,7 @@ export function judgeLoop(
 
 /** 工具执行**之后**：更新计数器。成功与失败走不同分支 */
 export function noteToolResult(
+  repoDir: string,
   cfg: GuardConfig,
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
@@ -130,7 +132,7 @@ export function noteToolResult(
     return;
   }
   bumpConsecutiveFail();
-  if (rel) bumpFileWriteFail(rel);
+  if (rel) bumpFileWriteFail(repoDir, rel);
   void cfg;
 }
 
