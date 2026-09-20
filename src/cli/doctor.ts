@@ -28,6 +28,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CONFIG_DIR } from '../runtime/paths.js';
+import { readFacts } from '../runtime/repo-facts.js';
+import { hasRedlines } from '../runtime/redlines.js';
 import { RULE } from './render.js';
 import {
   STANDARDS_DIR,
@@ -44,7 +46,7 @@ import {
   type Stack,
   type StandardItem,
 } from '../standards/schema.js';
-import { guardDirOf, templateDir as guardTemplateDir } from '../gates/config.js';
+import { guardDirOf, loadGuardConfig, templateDir as guardTemplateDir } from '../gates/config.js';
 import { collectAuditFindings, type Finding, type StandardsResult } from './standards.js';
 
 /** id 前缀 → 它应该属于哪个端。`PRJ-` 是项目层新增条目的保留前缀，不校验 */
@@ -309,12 +311,77 @@ function checkBudget(snap: StandardsSnapshot): Finding[] {
 
 // ══════════════════ 渲染 ══════════════════
 
+/**
+ * 四份配置的总览。
+ *
+ * ── 为什么这一段比后面的 finding 更重要 ──
+ * 真机反馈暴露的第一个问题不是"配错了"，而是"**不知道自己缺什么**"：
+ * `init` 这个名字听起来像初始化一切，实际它只生成 `repo-facts.json`，
+ * 红线与七道门各有各的命令。人跑完 init 看到目录里没有 redlines.json，
+ * 只会以为工具坏了。
+ *
+ * 所以这里把四份配置摊开：**有没有、管什么、缺了怎么补、不补会怎样**。
+ * 缺失一律不报 error —— 「没配置就不拦」是这个插件的核心承诺，
+ * 四份里一份都不配也是完全合法的用法。
+ */
+function overview(repoDir: string, snap: StandardsSnapshot): string[] {
+  const facts = readFacts(repoDir);
+  const redlines = hasRedlines(repoDir);
+  const guard = loadGuardConfig(repoDir).present;
+
+  const rows: Array<[boolean, string, string, string]> = [
+    [
+      Boolean(facts),
+      'repo-facts.json',
+      facts
+        ? `公共层 ${facts.publicLayer.length} 个目录、行数上限 ${facts.lineLimit}`
+        : '事实：哪些目录是公共层、单文件行数上限',
+      'repo-guard init --write',
+    ],
+    [
+      redlines,
+      'redlines.json',
+      redlines ? '红线意图（跑 `repo-guard audit` 验完整性）' : '红线意图：哪个符号不许怎么动。**人写，代码里读不出来**',
+      'repo-guard redlines init --write',
+    ],
+    [
+      guard,
+      'guard/',
+      guard ? '七道门（跑 `repo-guard guard show` 看实际生效）' : '协作七道门：范围 / 循环 / 交付 / 复述。铺了也全默认关',
+      'repo-guard guard init --write',
+    ],
+    [
+      snap.projectPresent,
+      'standards/',
+      snap.projectPresent
+        ? `研发规范 ${snap.items.length} 条，本仓关了 ${snap.items.filter((i) => !i.enabled).length} 条`
+        : '研发规范的项目层覆盖。**不铺则规范完全不参与运行时**',
+      'repo-guard standards init --write',
+    ],
+  ];
+
+  const out = ['', '配置总览（四份各管一件事，互相独立，都可以不配）'];
+  for (const [ok, name, what, cmd] of rows) {
+    out.push(`  ${ok ? '✓' : '✗'} ${name.padEnd(17)} ${what}`);
+    if (!ok) out.push(`${' '.repeat(22)}要它：${cmd}`);
+  }
+
+  const missing = rows.filter(([ok]) => !ok).length;
+  out.push(
+    missing
+      ? `  —— 缺 ${missing} 份。缺失不是错误：没配的那部分就是不生效，插件不会因此拦你。`
+      : '  —— 四份都在。',
+  );
+  return out;
+}
+
 export function runDoctor(repoDir: string, snap: StandardsSnapshot): StandardsResult {
   const globalDir = standardsTemplateDir();
   const projectDir = standardsDirOf(repoDir);
   const projectPresent = snap.projectPresent;
 
   const lines = ['', 'repo-guard · 配置体检', RULE];
+  lines.push(...overview(repoDir, snap), '', RULE);
 
   // 被加载的规范文件（分片枚举与运行时完全一致）
   const loaded: string[] = [];
