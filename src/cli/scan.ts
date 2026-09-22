@@ -10,7 +10,7 @@
  * 存量超长文件遍地都是。硬拦等于没法干活，而且这个工具的价值在"改动时提醒"，
  * 不在"清理历史债"。真要清就该挂流水线，让人排期。
  */
-import type { CodeGraph } from '../engine/graph/types.js';
+import type { CodeGraph } from '../graph/types.js';
 import { countLines } from '../runtime/repo-facts.js';
 import path from 'node:path';
 

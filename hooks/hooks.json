@@ -41,11 +41,11 @@
 
     "UserPromptSubmit": [
       {
-        "_": "L0 按任务路由（开发前必读）+ 需求复述提醒 + 埋点。⚠️ 这个钩子绝不能阻塞——continue:false 会把用户的提问整个吃掉。配置见 capability/task-routes.json 与 process/restate.json，两者默认都不产出内容。",
+        "_": "L0 按任务路由（开发前必读）+ 埋点。⚠️ 这个钩子绝不能阻塞——continue:false 会把用户的提问整个吃掉。配置见 capability/task-routes.json，默认不产出内容。",
         "hooks": [
           {
             "type": "command",
-            "description": "按任务类型注入必读清单；需求复述的本地启发式提醒",
+            "description": "按任务类型注入必读清单",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook user-prompt-submit",
             "timeout": 10
           }

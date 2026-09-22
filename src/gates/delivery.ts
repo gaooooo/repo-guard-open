@@ -85,7 +85,7 @@ const QUIET: DeliveryVerdict = { block: false, note: '' };
  * 所以不去重的话 `continue:false` 会让模型反复触发同一个校验、无限续跑。
  */
 export function judgeDelivery(cfg: GuardConfig, repoDir: string): DeliveryVerdict {
-  if (!cfg.gates.L5_delivery || !cfg.delivery.enabled) return QUIET;
+  if (!cfg.gates.delivery || !cfg.delivery.enabled) return QUIET;
 
   // 用跨仓总数：交付瘦身管的是"这一个提交里塞了多少东西"，
   // 而一次提交可能横跨多个仓（微服务改动常常是这样）
@@ -132,7 +132,7 @@ export function judgeDelivery(cfg: GuardConfig, repoDir: string): DeliveryVerdic
  * 纯埋点，不影响任何行为。
  */
 export function recordFinalSignal(cfg: GuardConfig, repoDir: string): void {
-  if (!cfg.gates.L4_signals) return;
+  if (!cfg.gates.signals) return;
 
   const touchedCount = countSessionFiles();
   const calls = toolCallCount();

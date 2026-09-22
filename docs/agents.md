@@ -40,4 +40,4 @@
 | 打算做什么 | 为什么还没做 |
 |---|---|
 | `repo-guard-fixer` —— 拿着 audit 结果去修红线文件（补 paths、删守空气的规则） | 修红线是在改**人的意图声明**，得有人 review。让 agent 自动改风险太大，先让 `audit` 把问题说清楚 |
-| L5 交付门的 `type: agent` 验证器 | 交付门默认关（见 `templates/guard/process/delivery.json`）。开启后这里需要一个能跑 lint/test 的 agent |
+| L5 交付门的 `type: agent` 验证器 | 交付门默认关（见 `layers/process-gates/process/delivery.json`）。开启后这里需要一个能跑 lint/test 的 agent |

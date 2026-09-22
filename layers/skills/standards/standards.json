@@ -1,0 +1,94 @@
+{
+  "_": [
+    "研发规范总闸 —— 五端标准模板的开关与强度上限。",
+    "",
+    "── 这一整个目录是什么 ──",
+    "`layers/skills/standards/` 是**全局层**（部门规范）：跟着插件版本走，改这里等于定制你们",
+    "自己的部门模板。它是只读默认值 —— 插件安装后缓存在",
+    "`~/.codebuddy/plugins/cache/<市场>/<插件>/<版本>/`，升级会换目录，所以不要指望",
+    "在安装后的副本里改。要改就改这个源码仓，或者用项目层覆盖。",
+    "",
+    "`repo-guard standards init --write` 会把它铺到被守护仓库的",
+    "`<repo>/.codebuddy/standards/`，那是**项目层**，要进 git —— 这些是团队共识。",
+    "",
+    "── 两层合并 ──",
+    "合并 key 是条目的 `id`，不是文件名。项目层三种操作：",
+    "  覆盖  同 id，**字段级浅合并** —— 只写要改的字段，其余继承全局层",
+    "  关闭  `{ \"id\": \"FE-UI-001\", \"enabled\": false, \"override_reason\": \"...\" }`",
+    "  新增  用 `PRJ-` 前缀的新 id，避免与未来版本的内置 id 撞",
+    "",
+    "**放宽必须留痕**：项目层降低强度或关闭条目时必须写 `override_reason`，",
+    "否则该 override 被忽略、仍按全局强度执行，并在 `standards audit` 里报 warn。",
+    "选『允许放宽但留痕』而不是『禁止放宽』，是因为这是单机插件，没有企业策略层能兜住",
+    "硬禁止 —— 硬禁止的唯一后果是人把整个目录删掉，那时连留痕都没了。",
+    "",
+    "── 硬约束：默认零拦截 ──",
+    "`maxSeverity` 默认 `remind`，意思是**所有 ask/block 条目自动降级为提醒**。",
+    "这不是保守，是这个插件能被接受的前提：装完就开始拦人的护栏，人的第一反应是卸载。",
+    "先看 `repo-guard governance` 的误伤率数据，再逐档上调。",
+    "",
+    "⚠️ 唯一的例外是公共层写前守卫（`CM-LAYER-002`）—— 它是插件的核心功能，",
+    "由 `.codebuddy/repo-facts.json` 的 `publicLayer` 驱动，**不受这里的开关控制**。",
+    "",
+    "── 为什么注释写在 `_` 字段里 ──",
+    "JSON 不支持注释。改用 JSONC 会让 `JSON.parse` 崩；注释另写 .md 必然失同步。",
+    "`_` 字段让注释和配置同文件同位置，改不了一个忘另一个。加载时忽略所有 `_` 开头的键。"
+  ],
+
+  "version": 1,
+
+  "_enabled": "总闸。false 时整套规范不加载，连文件都不读。",
+  "enabled": true,
+
+  "_maxSeverity": [
+    "全局强度上限。所有条目的 severity 都会被压到这个档位以下。",
+    "  inject  只注入上下文，任何判定都不做 —— 最安全，适合第一周",
+    "  remind  加上写完后的提醒（PostToolUse），不阻断任何操作 ← 默认",
+    "  ask     加上转人工确认（PreToolUse → ask）",
+    "  block   放开硬拦（PreToolUse → deny）",
+    "",
+    "调到 block 不等于所有条目都会拦 —— 每条还要自己满足『block 准入三条件』：",
+    "  ① paths 非空（全仓范围的硬拦一定误伤）",
+    "  ② confirmed: true（人确认过这条判据）",
+    "  ③ check.kind ∈ { protect_symbol, path_only, require_tool }",
+    "content_regex 永不 block：正则判不出意图。『改断言』和『修正一个写错的断言』",
+    "在文本层面一模一样。"
+  ],
+  "maxSeverity": "remind",
+
+  "_stacks": [
+    "按端启用。每个端对应本目录下一个 json 文件。",
+    "  auto  由 repo-facts.analyzer + 仓内目录特征探测 ← 默认",
+    "  on    强制启用",
+    "  off   强制关闭",
+    "",
+    "为什么默认 auto 而不是全 on：注入面每段 1500 token，五端全量必然撑爆，",
+    "而且给前端仓注入一份数据库迁移规范是纯噪音。",
+    "",
+    "⚠️ 前端仓必须让 database / message-queue 保持 off 或 auto。",
+    "『字段』一词在前端指接口出入参、在数据库那边指 schema —— 同一句话触发两套门禁，",
+    "结果是前端改个接口被要求写 migration。这是真实踩过的坑，见 FE-SKIP-001。"
+  ],
+  "stacks": {
+    "l0-contract": "on",
+    "common": "on",
+    "frontend-web": "auto",
+    "backend-service": "auto",
+    "database": "auto",
+    "message-queue": "auto"
+  },
+
+  "_injectBudgetTokens": "注入面每段 token 上限。与 inject.ts 的 SEGMENT_MAX_TOKENS 一致，超了按行截断并显式标注。",
+  "injectBudgetTokens": 1500,
+
+  "_stackDetect": [
+    "端探测的补充线索。auto 模式下先看 repo-facts.analyzer，再看这里的目录特征。",
+    "命中任意一条即认为该端存在。留空则只靠 analyzer。"
+  ],
+  "stackDetect": {
+    "frontend-web": ["src/views/", "src/pages/", "src/components/", "*.tsx", "*.vue"],
+    "backend-service": ["internal/handler/", "internal/service/", "cmd/", "*.go", "src/main/java/"],
+    "database": ["internal/repo/", "internal/model/", "migrations/", "*.sql"],
+    "message-queue": ["internal/mq/", "internal/consumer/", "internal/producer/"]
+  }
+}

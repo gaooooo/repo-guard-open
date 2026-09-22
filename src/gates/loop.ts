@@ -63,7 +63,7 @@ export function judgeLoop(
   toolInput: Record<string, unknown> | undefined,
   rel: string | null,
 ): LoopVerdict {
-  if (!cfg.gates.L3_loop || !cfg.loop.enabled) return PASS;
+  if (!cfg.gates.loop || !cfg.loop.enabled) return PASS;
 
   const fp = fingerprint(toolInput);
   if (fp) {
@@ -143,7 +143,7 @@ export function noteToolResult(
  * 所以阈值取配置值的 1.5 倍，宁可不提也别乱提。
  */
 export function iterationNote(cfg: GuardConfig): string {
-  if (!cfg.gates.L3_loop || !cfg.loop.enabled) return '';
+  if (!cfg.gates.loop || !cfg.loop.enabled) return '';
   const calls = toolCallCount();
   const soft = Math.floor(cfg.loop.maxIterations * 1.5);
   if (calls < soft) return '';

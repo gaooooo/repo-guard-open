@@ -2,6 +2,12 @@
 
 ## 未发布
 
+### facts.json 按仓库生成
+
+`init --write --all` / `guard init --write` / `layers init --write` 不再拷贝身份服务示例模板。
+按本仓目录、go.mod / package.json、repo-facts 生成架构事实；required 只含真实路径。
+已存在的 `.codebuddy/facts.json` 不覆盖。默认 `init --write`（无 --all）stdout 不变。
+
 ### 配置面重构：支撑「部门模板包」三级分发
 
 分发链从两级变成三级：**插件源码 →(`npm run pack`)→ 部门模板包 → 各项目 `.codebuddy/`**。

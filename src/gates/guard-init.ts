@@ -1,5 +1,5 @@
 /**
- * `guard init` —— 把 `templates/guard/` 铺到被守护仓库的 `.codebuddy/guard/`。
+ * `guard init` —— 把 layers/ 里过程门禁 + 事实/技能的 JSON 铺到 `.codebuddy/guard/`。
  *
  * ── 为什么默认一个字节都不写 ──
  * 和 `init` 同一条纪律：工具擅自改人的仓库是最快失去信任的方式。
@@ -13,9 +13,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONFIG_DIR } from '../runtime/paths.js';
-import { GUARD_DIR, guardDirOf, templateDir, type GuardConfig } from './config.js';
+import { configPath, pluginPath } from '../runtime/paths.js';
+import { FACTS_FILE, PROCESS_GATES_FILE, type GuardConfig } from './config.js';
 import { RULE } from '../cli/render.js';
+import { ensureFactsFromRepo, factsInitNote } from '../cli/facts-from-repo.js';
+import { ensureProcessGatesFromRepo, fillComponentFacts } from '../cli/process-gates-from-repo.js';
 
 export interface GuardInitResult {
   text: string;
@@ -23,25 +25,39 @@ export interface GuardInitResult {
 }
 
 /** 递归列出模板里的相对路径（只要 .json，README 不铺过去） */
-function listTemplate(dir: string, base = dir, out: string[] = []): string[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      listTemplate(full, base, out);
-      continue;
+interface GuardTplFile { src: string; dest: string; }
+
+function listGuardTemplates(): GuardTplFile[] {
+  const out: GuardTplFile[] = [];
+  const walk = (dir: string, destPrefix: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
     }
-    // README.md 是给开发者看的，不该出现在用户仓库里 ——
-    // 用户仓库里的 .codebuddy/guard/ 应该只有配置
-    if (!e.name.endsWith('.json')) continue;
-    out.push(path.relative(base, full).split(path.sep).join('/'));
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        walk(full, destPrefix ? destPrefix + "/" + e.name : e.name);
+        continue;
+      }
+      if (!e.name.endsWith(".json")) continue;
+      const dest = destPrefix ? destPrefix + "/" + e.name : e.name;
+      out.push({ src: full, dest });
+    }
+  };
+  walk(pluginPath("layers", "process-gates"), "");
+  const extras: Array<{ parts: string[]; dest: string }> = [
+    { parts: ["layers", "facts", "charter.json"], dest: "identity/charter.json" },
+    { parts: ["layers", "facts", "project-knowledge.json"], dest: "capability/project-knowledge.json" },
+    { parts: ["layers", "skills", "task-routes.json"], dest: "capability/task-routes.json" },
+  ];
+  for (const x of extras) {
+    const src = pluginPath(...x.parts);
+    if (fs.existsSync(src)) out.push({ src, dest: x.dest });
   }
-  return out.sort();
+  return out.sort((a, b) => a.dest.localeCompare(b.dest));
 }
 
 /**
@@ -54,21 +70,21 @@ function listTemplate(dir: string, base = dir, out: string[] = []): string[] {
  */
 export function renderGuardShow(repoDir: string, cfg: GuardConfig): string {
   const lines = ['', 'repo-guard · 实际生效的门禁配置', RULE];
-  lines.push(`配置目录  ${CONFIG_DIR}/${GUARD_DIR}/  ${cfg.present ? '已找到' : '**不存在** → 全部走默认（全关）'}`);
+  lines.push(`配置文件  .codebuddy/process-gates.json + facts.json  ${cfg.present ? '已找到' : '**不存在** → 全部走默认（全关）'}`);
 
   lines.push('', '总闸');
   const gateNote: Record<string, string> = {
-    L0_inject: '注入面（只推不拦）',
-    L1_admission: '准入门（红线硬拦 / 禁改 / 范围门 / 图谱强制）',
-    L3_loop: '循环门（重复调用 / 连续失败 / 同文件写失败）',
-    L4_signals: '诚实信号（纯观测）',
-    L5_delivery: '交付门（工程校验 / 交付瘦身）',
-    L6_governance: '治理留痕',
+    inject: '注入面（只推不拦）',
+    admission: '准入门（红线硬拦 / 禁改 / 范围门 / 图谱强制）',
+    loop: '循环门（重复调用 / 连续失败 / 同文件写失败）',
+    signals: '诚实信号（纯观测）',
+    delivery: '交付门（工程校验 / 交付瘦身）',
+    governance: '治理留痕',
   };
   for (const [k, v] of Object.entries(cfg.gates)) {
     lines.push(`  ${v ? '开' : '关'}  ${k.padEnd(14)} ${gateNote[k] ?? ''}`);
   }
-  lines.push('  --  L2_execution  执行门 → 交宿主的 permissions / sandbox，插件永不实现');
+  lines.push('  --  execution  交给宿主 permissions / sandbox，插件不实现');
 
   lines.push('', '注入面内容');
   lines.push(`  项目使命    ${cfg.inject.mission ? '有' : '空'}`);
@@ -89,9 +105,9 @@ export function renderGuardShow(repoDir: string, cfg: GuardConfig): string {
   lines.push('  图谱强制');
   lines.push('    改公共层→impact   开（核心功能，不可关）');
   for (const [label, sub] of [
-    ['新建页面→similar ', g.newPageSimilar],
-    ['新建组件→hot     ', g.newComponentHot],
-    ['新建组件→lib     ', g.newComponentLibSearch],
+    ['新建页/接口→similar', g.newPageSimilar],
+    ['新建公共符号→hot  ', g.newComponentHot],
+    ['新建 UI 组件→lib ', g.newComponentLibSearch],
   ] as const) {
     lines.push(
       `    ${label} ${sub.enabled ? '开' : '关'}` +
@@ -121,18 +137,16 @@ export function renderGuardShow(repoDir: string, cfg: GuardConfig): string {
   );
   lines.push(`      AI 审查   ${cfg.review.enabled ? '开' : '关'}`);
 
-  lines.push('', `需求复述    ${cfg.restate.enabled ? '开' : '关'}（零阻塞，只注入提醒）`);
-
   // 常见的"配了没生效"都出在这几处，直接点出来比让人自己找快得多
   const hints: string[] = [];
-  if (cfg.present && !cfg.gates.L1_admission) {
-    hints.push('L1 总闸是关的 —— 红线硬拦 / 禁改 / 范围门 / 图谱强制**全部不生效**，哪怕它们各自的 enabled 是 true。');
+  if (cfg.present && !cfg.gates.admission) {
+    hints.push('admission 总闸是关的 —— 红线硬拦 / 禁改 / 范围门 / 图谱强制**全部不生效**，哪怕它们各自的 enabled 是 true。');
   }
-  if (cfg.present && !cfg.gates.L5_delivery && cfg.delivery.enabled) {
-    hints.push('delivery.json 的 enabled 是 true，但 L5 总闸关着 —— 不生效。');
+  if (cfg.present && !cfg.gates.delivery && cfg.delivery.enabled) {
+    hints.push('delivery.json 的 enabled 是 true，但 gates.delivery 总闸关着 —— 不生效。');
   }
-  if (cfg.present && !cfg.gates.L3_loop && cfg.loop.enabled) {
-    hints.push('loop.json 的 enabled 是 true，但 L3 总闸关着 —— 不生效。');
+  if (cfg.present && !cfg.gates.loop && cfg.loop.enabled) {
+    hints.push('loop.json 的 enabled 是 true，但 gates.loop 总闸关着 —— 不生效。');
   }
   if (hints.length) {
     lines.push('', '⚠ 注意');
@@ -144,77 +158,52 @@ export function renderGuardShow(repoDir: string, cfg: GuardConfig): string {
 }
 
 export function runGuardInit(repoDir: string, write: boolean): GuardInitResult {
-  const tpl = templateDir();
-  const files = listTemplate(tpl);
-  const target = guardDirOf(repoDir);
+  const pgSrc = pluginPath('layers', 'process-gates', 'process-gates.json');
+  const pgDest = configPath(repoDir, PROCESS_GATES_FILE);
+  const factsDest = configPath(repoDir, FACTS_FILE);
+  const lines = ['', 'repo-guard · 过程门禁 + 工程事实', RULE];
 
-  if (!files.length) {
-    return {
-      text:
-        `\n找不到配置模板：${tpl}\n` +
-        '这通常意味着插件产物与 templates/ 目录被分开了 —— ' +
-        '`bin/repo-guard` 与 `templates/` 必须在同一个插件目录下。\n',
-      exitCode: 2,
-    };
+  if (!fs.existsSync(pgSrc)) {
+    return { text: '\n找不到过程门禁模板 layers/process-gates/process-gates.json。\n', exitCode: 2 };
   }
 
-  const lines = ['', 'repo-guard · 协作全景配置骨架', RULE];
+  const pgExists = fs.existsSync(pgDest);
+  const factsExists = fs.existsSync(factsDest);
+  lines.push(
+    pgExists
+      ? '已存在 .codebuddy/process-gates.json  —— 会按本仓目录补 similar/hot/lib 的 pathPatterns（不覆盖人填过的）'
+      : '将写入 .codebuddy/process-gates.json  （按本仓目录填 pathPatterns，enabled 默认关）',
+  );
+  lines.push(
+    factsExists
+      ? '已存在 .codebuddy/facts.json  —— 不会覆盖'
+      : '将写入 .codebuddy/facts.json  （' + factsInitNote(false) + '）',
+  );
+  lines.push('若已有 repo-facts.json：空的 componentLibrary / 缺的 componentMcp 会按 package.json 补');
 
-  const fresh: string[] = [];
-  const existing: string[] = [];
-  for (const rel of files) {
-    (fs.existsSync(path.join(target, rel)) ? existing : fresh).push(rel);
+  if (!write) {
+    lines.push('', '要写入请加 --write');
+    return { text: lines.join('\n') + '\n', exitCode: 0 };
   }
 
-  lines.push(`目标    ${CONFIG_DIR}/${GUARD_DIR}/`);
-  lines.push(`模板    ${files.length} 个配置文件`);
-
-  if (existing.length) {
-    lines.push('', `已存在 ${existing.length} 个，**不会覆盖**：`);
-    for (const rel of existing) lines.push(`    - ${rel}`);
-    lines.push('    模板若有新增字段，请自己对照 templates/guard/ 补。');
-  }
-  if (fresh.length) {
-    lines.push('', `将写入 ${fresh.length} 个：`);
-    for (const rel of fresh) lines.push(`    + ${rel}`);
+  try {
+    fs.mkdirSync(path.dirname(pgDest), { recursive: true });
+    for (const n of ensureProcessGatesFromRepo(repoDir, pgDest)) lines.push(n);
+    const factsAct = ensureFactsFromRepo(repoDir, factsDest);
+    lines.push(
+      factsAct === 'skip'
+        ? 'skip  .codebuddy/facts.json'
+        : 'write .codebuddy/facts.json  -- ' + factsInitNote(false),
+    );
+    for (const n of fillComponentFacts(repoDir)) lines.push('  ' + n);
+  } catch {
+    lines.push('', '写入失败');
+    return { text: lines.join('\n') + '\n', exitCode: 1 };
   }
 
   lines.push(
     '',
-    '铺过去之后要做两件事：',
-    '  1. 进 git —— 这些是团队共识，不是个人偏好',
-    '  2. 逐个打开看注释。**所有门默认关**，装完不会有任何新的拦截；',
-    '     想开哪道门就把对应的 enabled 改成 true',
+    'facts.json 按本仓生成；停止条件写在 stopConditions。图谱强制默认关，打开 admission 并把对应 enabled 设为 true 才硬拦。',
   );
-
-  if (!write) {
-    lines.push('', '要写入请加 --write');
-    return { text: `${lines.join('\n')}\n`, exitCode: 0 };
-  }
-
-  if (!fresh.length) {
-    lines.push('', '没有需要写入的文件。');
-    return { text: `${lines.join('\n')}\n`, exitCode: 0 };
-  }
-
-  let written = 0;
-  const failed: string[] = [];
-  for (const rel of fresh) {
-    try {
-      const dst = path.join(target, rel);
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(path.join(tpl, rel), dst);
-      written++;
-    } catch (e) {
-      failed.push(`${rel}（${(e as Error).message}）`);
-    }
-  }
-
-  lines.push('', `已写入  ${written} 个文件到 ${CONFIG_DIR}/${GUARD_DIR}/`);
-  if (failed.length) {
-    lines.push('', `写入失败 ${failed.length} 个：`);
-    for (const f of failed) lines.push(`    ${f}`);
-  }
-
-  return { text: `${lines.join('\n')}\n`, exitCode: failed.length ? 1 : 0 };
+  return { text: lines.join('\n') + '\n', exitCode: 0 };
 }

@@ -34,7 +34,7 @@ description: React + TypeScript 前端开发的工作方式与约束。当任务
 - 抽象提问（「写一个多选下拉」）**同样要查**，不能因为没提到文件路径就跳过
 - 新建公共组件前，先确认库里没有现成的
 
-装了工具就用 `repo-guard lib search <意图>`；没装就读组件库的类型定义文件，不要凭记忆写。
+装了工具就用 `repo-guard lib search <意图>`，再按仓库 `.codebuddy/repo-facts.json` 的 `componentMcp`（Tea 常见为 `garden-mcp-component`）去查组件文档和 props。lib_search 只回答「有没有现成的」；具体 API 以该 MCP 为准。没装 MCP 就读组件库的类型定义文件，不要凭记忆写。
 
 ## 约束
 

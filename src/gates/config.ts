@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { configPath, readJson } from '../runtime/paths.js';
+import { configPath, pluginPath, readJson } from '../runtime/paths.js';
 
 /** guard 配置在被守护仓库里的位置 */
 export const GUARD_DIR = 'guard';
@@ -58,13 +58,6 @@ export interface ReviewConfig {
   minRiskLevel: 'medium' | 'high';
   blockOnRequestChanges: boolean;
   agent: string;
-}
-
-export interface RestateConfig {
-  enabled: boolean;
-  lengthRatio: [number, number];
-  skipReasons: string[];
-  model: string;
 }
 
 export interface GraphEnforceConfig {
@@ -104,12 +97,12 @@ export interface GuardConfig {
   /** 配置目录是否存在。false 时下面全是默认值（= 全关） */
   present: boolean;
   gates: {
-    L0_inject: boolean;
-    L1_admission: boolean;
-    L3_loop: boolean;
-    L4_signals: boolean;
-    L5_delivery: boolean;
-    L6_governance: boolean;
+    inject: boolean;
+    admission: boolean;
+    loop: boolean;
+    signals: boolean;
+    delivery: boolean;
+    governance: boolean;
   };
   inject: InjectConfig;
   noRefactor: NoRefactorEntry[];
@@ -118,7 +111,6 @@ export interface GuardConfig {
   loop: LoopGuardConfig;
   delivery: DeliveryConfig;
   review: ReviewConfig;
-  restate: RestateConfig;
 }
 
 // ── 默认值。改这里等于改"没配置时的行为"，务必保持全关 ──
@@ -129,12 +121,12 @@ export function defaultConfig(): GuardConfig {
     gates: {
       // L0 与 L6 默认开：一个只注入、一个只写自己的文件，都没有误伤风险。
       // 其余一律关 —— 见文件头。
-      L0_inject: true,
-      L1_admission: false,
-      L3_loop: false,
-      L4_signals: false,
-      L5_delivery: false,
-      L6_governance: true,
+      inject: true,
+      admission: false,
+      loop: false,
+      signals: false,
+      delivery: false,
+      governance: true,
     },
     inject: {
       enabled: true,
@@ -171,12 +163,6 @@ export function defaultConfig(): GuardConfig {
       evidencePatterns: [],
     },
     review: { enabled: false, minRiskLevel: 'medium', blockOnRequestChanges: false, agent: '' },
-    restate: {
-      enabled: false,
-      lengthRatio: [0.7, 1.3],
-      skipReasons: ['too_short', 'question_only', 'ack_followup'],
-      model: '',
-    },
   };
 }
 
@@ -212,153 +198,136 @@ function readGuard<T>(repoDir: string, rel: string): Partial<T> {
  * 这个函数在 hook 的关键路径上，抛异常会让工具调用被阻断 ——
  * 为了一个配置语法错误把人的操作弄失败，是最蠢的失败方式。
  */
-export function loadGuardConfig(repoDir: string): GuardConfig {
-  const cfg = defaultConfig();
+export const PROCESS_GATES_FILE = 'process-gates.json';
+export const FACTS_FILE = 'facts.json';
 
-  const dir = configPath(repoDir, GUARD_DIR);
-  try {
-    if (!fs.statSync(dir).isDirectory()) return cfg;
-  } catch {
-    return cfg; // 没铺过配置：全默认 = 全关
-  }
-  cfg.present = true;
+function flagEnabled(v: unknown, d: boolean): boolean {
+  if (typeof v === 'boolean') return v;
+  return bool(obj(v).enabled, d);
+}
 
-  // ── 总闸 ──
-  const root = readGuard<{ gates: Record<string, { enabled?: unknown }>; requirementRestate: { enabled?: unknown } }>(
-    repoDir,
-    'guard.json',
-  );
-  const gates = obj(root.gates);
-  for (const key of Object.keys(cfg.gates) as Array<keyof GuardConfig['gates']>) {
-    cfg.gates[key] = bool(obj(gates[key]).enabled, cfg.gates[key]);
-  }
-  // L2 执行门交给宿主的 permissions / sandbox，插件永不实现。
-  // 它在 guard.json 里有个位置只是为了让全景七道门都能被看到。
-
-  // ── L0 注入面 ──
-  const charter = readGuard<{ mission: unknown; facts: unknown; discipline: unknown }>(
-    repoDir,
-    'identity/charter.json',
-  );
-  cfg.inject.mission = str(charter.mission).trim();
-  cfg.inject.facts = strArr(charter.facts);
-  cfg.inject.discipline = strArr(charter.discipline);
-
-  const pk = readGuard<{ items: unknown }>(repoDir, 'capability/project-knowledge.json');
-  if (Array.isArray(pk.items)) {
-    for (const raw of pk.items) {
-      const it = obj(raw);
-      // enabled=false 是"先写下来但暂不生效"的开关，不是配置错误
-      if (it.enabled !== true) continue;
-      const content = str(it.content).trim();
-      if (!content) continue;
-      cfg.inject.knowledge.push({ id: str(it.id, '?'), topic: str(it.topic).trim(), content });
-    }
-  }
-
-  cfg.inject.taboos = strArr(readGuard<{ items: unknown }>(repoDir, 'constraint/taboos.json').items);
-  cfg.inject.stopConditions = strArr(
-    readGuard<{ items: unknown }>(repoDir, 'constraint/stop-conditions.json').items,
-  );
-
-  const routes = obj(readGuard<{ routes: unknown }>(repoDir, 'capability/task-routes.json').routes);
-  for (const [name, raw] of Object.entries(routes)) {
-    if (name.startsWith('_')) continue; // 注释键
-    const r = obj(raw);
-    if (r.enabled !== true) continue;
-    const match = strArr(r.match);
-    if (!match.length) continue; // 没有 match 的路由永远不会命中，等于没配
-    cfg.inject.taskRoutes.push({
-      name,
-      match,
-      required: strArr(r.required),
-      hardGate: str(r.hard_gate).trim(),
-    });
-  }
-
-  // ── L1 准入门 ──
-  const nr = readGuard<{ entries: unknown }>(repoDir, 'constraint/no-refactor.json');
-  if (Array.isArray(nr.entries)) {
-    for (const raw of nr.entries) {
-      const e = obj(raw);
-      const p = str(e.path).trim();
-      if (!p) continue;
-      cfg.noRefactor.push({ path: p, reason: str(e.reason).trim(), confirmed: bool(e.confirmed, false) });
-    }
-  }
-
-  const sg = readGuard<ScopeGateConfig>(repoDir, 'constraint/scope-gate.json');
-  cfg.scopeGate = {
-    enabled: bool(sg.enabled, false),
-    allowlist: strArr(sg.allowlist),
-    maxFiles: nullableInt(sg.maxFiles),
-  };
-
-  const ge = readGuard<Record<string, unknown>>(repoDir, 'process/graph-enforce.json');
-  const subGate = (key: string) => {
-    const o = obj(ge[key]);
-    return { enabled: bool(o.enabled, false), pathPatterns: strArr(o.pathPatterns) };
-  };
-  cfg.graphEnforce = {
-    // 这一条不读配置：它是插件的核心功能，关掉等于卸载插件
-    publicLayerImpact: true,
-    newPageSimilar: subGate('newPageSimilar'),
-    newComponentHot: subGate('newComponentHot'),
-    newComponentLibSearch: subGate('newComponentLibSearch'),
-  };
-
-  // ── L3 循环门 ──
-  const loop = readGuard<Record<string, unknown>>(repoDir, 'process/loop.json');
-  cfg.loop = {
-    enabled: bool(loop.enabled, false),
-    repeatToolCallThreshold: posInt(loop.repeatToolCallThreshold, 3),
-    consecutiveFailThreshold: posInt(loop.consecutiveFailThreshold, 3),
-    sameFileWriteFailThreshold: posInt(loop.sameFileWriteFailThreshold, 2),
-    maxIterations: posInt(loop.maxIterations, 80),
-    // 恒 true：插件没有对话循环的所有权，拿不到 iteration 序号。
-    // 允许配置会让人以为它能拦。
+function asLoop(raw: unknown, d: LoopGuardConfig): LoopGuardConfig {
+  const o = obj(raw);
+  return {
+    enabled: bool(o.enabled, d.enabled),
+    repeatToolCallThreshold: posInt(o.repeatToolCallThreshold, d.repeatToolCallThreshold),
+    consecutiveFailThreshold: posInt(o.consecutiveFailThreshold, d.consecutiveFailThreshold),
+    sameFileWriteFailThreshold: posInt(o.sameFileWriteFailThreshold, d.sameFileWriteFailThreshold),
+    maxIterations: posInt(o.maxIterations, d.maxIterations),
     maxIterationsObserveOnly: true,
   };
+}
 
-  // ── L5 交付门 ──
-  const dl = readGuard<Record<string, unknown>>(repoDir, 'process/delivery.json');
-  const ec = obj(dl.engineeringCheck);
-  const db = obj(dl.deliveryBudget);
-  cfg.delivery = {
-    enabled: bool(dl.enabled, false),
-    engineeringCheck: {
-      enabled: bool(ec.enabled, false),
-      mode: ec.mode === 'block' ? 'block' : 'warn',
-    },
-    deliveryBudget: {
-      enabled: bool(db.enabled, false),
-      maxDeliveryFiles: nullableInt(db.maxDeliveryFiles),
-    },
-    evidencePatterns: strArr(dl.evidencePatterns),
-  };
+function asSub(raw: unknown): { enabled: boolean; pathPatterns: string[] } {
+  if (typeof raw === 'boolean') return { enabled: raw, pathPatterns: [] };
+  const o = obj(raw);
+  return { enabled: bool(o.enabled, false), pathPatterns: strArr(o.pathPatterns) };
+}
 
-  const rv = readGuard<Record<string, unknown>>(repoDir, 'process/review.json');
-  cfg.review = {
-    enabled: bool(rv.enabled, false),
-    minRiskLevel: rv.minRiskLevel === 'high' ? 'high' : 'medium',
-    blockOnRequestChanges: bool(rv.blockOnRequestChanges, false),
-    agent: str(rv.agent).trim(),
-  };
+/**
+ * 过程门禁 + 工程事实（机器侧）。
+ *
+ * 项目仓只读两个薄文件：
+ *   .codebuddy/process-gates.json
+ *   .codebuddy/facts.json
+ * 都不在 = 零行为变化（公共层守卫仍由 repo-facts 驱动，不走这里）。
+ */
+export function loadGuardConfig(repoDir: string): GuardConfig {
+  const cfg = defaultConfig();
+  const pg = readJson<Record<string, unknown>>(configPath(repoDir, PROCESS_GATES_FILE));
+  const facts = readJson<Record<string, unknown>>(configPath(repoDir, FACTS_FILE));
+  if (!pg && !facts) return cfg;
 
-  // ── 需求复述（独立于七道门）──
-  const rs = readGuard<Record<string, unknown>>(repoDir, 'process/restate.json');
-  const ratio = Array.isArray(rs.lengthRatio) ? rs.lengthRatio : [];
-  cfg.restate = {
-    enabled: bool(rs.enabled, bool(obj(root.requirementRestate).enabled, false)),
-    lengthRatio: [
-      typeof ratio[0] === 'number' ? ratio[0] : 0.7,
-      typeof ratio[1] === 'number' ? ratio[1] : 1.3,
-    ],
-    skipReasons: strArr(rs.skipReasons).length
-      ? strArr(rs.skipReasons)
-      : ['too_short', 'question_only', 'ack_followup'],
-    model: str(rs.model).trim(),
-  };
+  if (pg) {
+    cfg.present = true;
+    cfg.gates.inject = flagEnabled(pg.inject, cfg.gates.inject);
+    cfg.gates.admission = flagEnabled(pg.admission, cfg.gates.admission);
+    cfg.gates.loop = flagEnabled(obj(pg.loop).enabled ?? pg.loop, cfg.gates.loop);
+    cfg.gates.signals = flagEnabled(pg.signals, cfg.gates.signals);
+    cfg.gates.delivery = flagEnabled(obj(pg.delivery).enabled ?? pg.delivery, cfg.gates.delivery);
+    cfg.gates.governance = flagEnabled(pg.governance, cfg.gates.governance);
+
+    if (Array.isArray(pg.noRefactor)) {
+      for (const raw of pg.noRefactor) {
+        const e = obj(raw);
+        const pth = str(e.path).trim();
+        if (!pth) continue;
+        cfg.noRefactor.push({ path: pth, reason: str(e.reason).trim(), confirmed: bool(e.confirmed, false) });
+      }
+    }
+
+    const sg = obj(pg.scope);
+    cfg.scopeGate = {
+      enabled: bool(sg.enabled, false),
+      allowlist: strArr(sg.allowlist),
+      maxFiles: nullableInt(sg.maxFiles),
+    };
+
+    cfg.graphEnforce = {
+      publicLayerImpact: true,
+      newPageSimilar: asSub(pg.newPageSimilar),
+      newComponentHot: asSub(pg.newComponentHot),
+      newComponentLibSearch: asSub(pg.newComponentLibSearch),
+    };
+
+    cfg.loop = asLoop(pg.loop, cfg.loop);
+
+    const dl = obj(pg.delivery);
+    const ec = obj(dl.engineeringCheck);
+    cfg.delivery = {
+      enabled: bool(dl.enabled, false),
+      engineeringCheck: {
+        enabled: typeof dl.engineeringCheck === 'string' ? dl.engineeringCheck !== 'off' : bool(ec.enabled, false),
+        mode: (typeof dl.engineeringCheck === 'string' ? dl.engineeringCheck : str(ec.mode)) === 'block' ? 'block' : 'warn',
+      },
+      deliveryBudget: {
+        enabled: bool(obj(dl.deliveryBudget).enabled, bool(dl.maxDeliveryFiles != null && dl.maxDeliveryFiles !== undefined, false)),
+        maxDeliveryFiles: nullableInt(obj(dl.deliveryBudget).maxDeliveryFiles ?? dl.maxDeliveryFiles),
+      },
+      evidencePatterns: strArr(dl.evidencePatterns),
+    };
+
+    const rv = obj(pg.review);
+    cfg.review = {
+      enabled: bool(rv.enabled, false),
+      minRiskLevel: rv.minRiskLevel === 'high' ? 'high' : 'medium',
+      blockOnRequestChanges: bool(rv.blockOnRequestChanges, false),
+      agent: str(rv.agent).trim(),
+    };
+  }
+
+  if (facts) {
+    cfg.inject.mission = str(facts.mission).trim();
+    cfg.inject.facts = strArr(facts.facts);
+    cfg.inject.discipline = strArr(facts.discipline);
+    cfg.inject.taboos = strArr(facts.taboos);
+    cfg.inject.stopConditions = strArr(facts.stopConditions);
+    if (Array.isArray(facts.knowledge)) {
+      for (const raw of facts.knowledge) {
+        const it = obj(raw);
+        if (it.enabled !== true) continue;
+        const content = str(it.content).trim();
+        if (!content) continue;
+        cfg.inject.knowledge.push({ id: str(it.id, '?'), topic: str(it.topic).trim(), content });
+      }
+    }
+    const routes = obj(facts.taskRoutes);
+    const routeList = Array.isArray(facts.taskRoutes) ? facts.taskRoutes : Object.entries(routes).map(([name, raw]) => ({ name, ...(obj(raw) as object) }));
+    for (const raw of routeList as unknown[]) {
+      const r = obj(raw);
+      const name = str(r.name, '').trim();
+      if (!name || name.startsWith('_')) continue;
+      if (r.enabled !== true) continue;
+      const match = strArr(r.match);
+      if (!match.length) continue;
+      cfg.inject.taskRoutes.push({
+        name,
+        match,
+        required: strArr(r.required),
+        hardGate: str(r.hard_gate || r.hardGate).trim(),
+      });
+    }
+  }
 
   return cfg;
 }
@@ -376,8 +345,8 @@ export function guardDirOf(repoDir: string): string {
   return configPath(repoDir, GUARD_DIR);
 }
 
-/** 插件里模板目录的绝对路径。产物在 bin/ 下，模板在 ../templates/guard */
+/** 插件里模板目录的绝对路径。layers/process-gates/；章程/知识/路由在 facts/skills，init 拼进项目 guard/ */
 export function templateDir(): string {
   // __dirname 在打包后的 CJS 产物里指向 bin/
-  return path.resolve(__dirname, '..', 'templates', GUARD_DIR);
+  return pluginPath('layers', 'process-gates');
 }

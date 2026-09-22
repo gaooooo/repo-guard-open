@@ -36,6 +36,7 @@ export type MetricEvent =
   | 'graph_query'
   /** 命中红线 */
   | 'redline_hit'
+  | 'redline_ask'
   /** L1 范围门拦住了（allowlist 不命中 / 文件数超预算） */
   | 'scope_deny'
   /** L1 禁改清单拦住了 */
@@ -48,8 +49,6 @@ export type MetricEvent =
   | 'final_signal'
   /** L5 交付门提醒或拦截 */
   | 'delivery_warn'
-  /** 需求复述检查（关着时也记，用于回答"如果开了会触发多少次"） */
-  | 'restate_check'
   /** 研发规范：remind 级命中，提醒了 */
   | 'standards_hit'
   /** 研发规范：block 级拦住了（受保护符号 / 必须先调工具） */

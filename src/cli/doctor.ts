@@ -27,7 +27,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONFIG_DIR } from '../runtime/paths.js';
+import { CONFIG_DIR, configPath, pluginPath } from '../runtime/paths.js';
 import { readFacts } from '../runtime/repo-facts.js';
 import { hasRedlines } from '../runtime/redlines.js';
 import { RULE } from './render.js';
@@ -46,7 +46,7 @@ import {
   type Stack,
   type StandardItem,
 } from '../standards/schema.js';
-import { guardDirOf, loadGuardConfig, templateDir as guardTemplateDir } from '../gates/config.js';
+import { loadGuardConfig } from '../gates/config.js';
 import { collectAuditFindings, type Finding, type StandardsResult } from './standards.js';
 
 /** id 前缀 → 它应该属于哪个端。`PRJ-` 是项目层新增条目的保留前缀，不校验 */
@@ -152,7 +152,7 @@ function allJsonUnder(dir: string): string[] {
     }
     for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
+      if (e.isDirectory()) { if (e.name === '.cache') continue; walk(p); }
       else if (e.name.endsWith('.json')) out.push(p);
     }
   };
@@ -341,7 +341,7 @@ function overview(repoDir: string, snap: StandardsSnapshot): string[] {
     [
       redlines,
       'redlines.json',
-      redlines ? '红线意图（跑 `repo-guard audit` 验完整性）' : '红线意图：哪个符号不许怎么动。**人写，代码里读不出来**',
+      redlines ? '红线（跑 `repo-guard audit` 验守空气/后门/行号）' : '红线：哪个符号不许少。**人写 protects+paths，代码里读不出来**',
       'repo-guard redlines init --write',
     ],
     [
@@ -416,8 +416,8 @@ export function runDoctor(repoDir: string, snap: StandardsSnapshot): StandardsRe
   // ① JSON 合法性：规范两层 + guard 两层。凡是部门/个人能改的 JSON 都过一遍
   findings.push(...checkJsonSyntax(allJsonUnder(globalDir), 'JSON'));
   if (projectPresent) findings.push(...checkJsonSyntax(allJsonUnder(projectDir), 'JSON'));
-  findings.push(...checkJsonSyntax(allJsonUnder(guardTemplateDir()), 'JSON'));
-  findings.push(...checkJsonSyntax(allJsonUnder(guardDirOf(repoDir)), 'JSON'));
+  findings.push(...checkJsonSyntax(allJsonUnder(pluginPath('layers')), 'JSON'));
+  findings.push(...checkJsonSyntax(allJsonUnder(configPath(repoDir)), 'JSON'));
 
   if (snap.enabled) {
     findings.push(...collectAuditFindings(snap)); // audit 的全部判定，复用不重写

@@ -17,7 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { configPath, readJson } from '../runtime/paths.js';
+import { configPath, pluginPath, readJson } from '../runtime/paths.js';
 import { normalizePrefix, type RepoFacts } from '../runtime/repo-facts.js';
 import { mergeLayers, type MergeWarning } from './merge.js';
 import {
@@ -64,11 +64,11 @@ export function standardsDirOf(repoDir: string): string {
 /**
  * 插件里模板目录的绝对路径。
  *
- * `__dirname` 在打包后的 CJS 产物里指向 `bin/`，所以往上一级找 `templates/`。
- * 与 `gates/config.ts` 的 `templateDir()` 同构。
+ * 全局层在 `layers/skills/standards/`（作者面技能库下的规范目录）。
+ * 产物在 `bin/` 下，往上一级即插件根。
  */
 export function standardsTemplateDir(): string {
-  return path.resolve(__dirname, '..', 'templates', STANDARDS_DIR);
+  return pluginPath('layers', 'skills', STANDARDS_DIR);
 }
 
 function emptySnapshot(reason: string): StandardsSnapshot {
@@ -87,7 +87,11 @@ function emptySnapshot(reason: string): StandardsSnapshot {
 // ── 总闸 ──
 
 function readSwitchboard(dir: string): Partial<StandardsSwitchboard> | null {
-  const raw = readJson<Record<string, unknown>>(path.join(dir, 'standards.json'));
+  return readSwitchboardFile(path.join(dir, 'standards.json'));
+}
+
+function readSwitchboardFile(file: string): Partial<StandardsSwitchboard> | null {
+  const raw = readJson<Record<string, unknown>>(file);
   if (!raw) return null;
   const out: Partial<StandardsSwitchboard> = {};
   if (typeof raw.enabled === 'boolean') out.enabled = raw.enabled;
@@ -429,12 +433,15 @@ export function loadStandards(
   const globalDir = standardsTemplateDir();
   const projectDir = standardsDirOf(repoDir);
 
-  let projectPresent = false;
+  const projectFile = configPath(repoDir, 'standards.json');
+  let projectDirExists = false;
   try {
-    projectPresent = fs.statSync(projectDir).isDirectory();
+    projectDirExists = fs.statSync(projectDir).isDirectory();
   } catch {
-    projectPresent = false;
+    projectDirExists = false;
   }
+  const projectFileExists = fs.existsSync(projectFile);
+  const projectPresent = projectDirExists || projectFileExists;
 
   let globalPresent = false;
   try {
@@ -448,7 +455,7 @@ export function loadStandards(
 
   const sb = mergeSwitchboard(
     mergeSwitchboard(defaultSwitchboard(), globalPresent ? readSwitchboard(globalDir) : null),
-    projectPresent ? readSwitchboard(projectDir) : null,
+    projectFileExists ? readSwitchboardFile(projectFile) : projectDirExists ? readSwitchboard(projectDir) : null,
   );
   if (!sb.enabled) {
     const snap = emptySnapshot('standards.json 的 enabled 为 false');
@@ -480,7 +487,7 @@ export function loadStandards(
   }
 
   const g = globalPresent ? readLayer(globalDir, active, 'global') : emptyLayer();
-  const p = projectPresent ? readLayer(projectDir, active, 'project') : emptyLayer();
+  const p = projectDirExists ? readLayer(projectDir, active, 'project') : emptyLayer();
   const merged = mergeLayers(g.items, p.items, p.raw);
   const layerWarnings = expandPublicLayer(merged.items, facts);
 

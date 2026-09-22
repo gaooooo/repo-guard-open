@@ -22,11 +22,11 @@
  */
 import path from 'node:path';
 
-import { renderApiContractsAsTs, renderSimilar, type ReportContext } from '../engine/graph-report.js';
+import { renderApiContractsAsTs, renderSimilar, type ReportContext } from '../graph/graph-report.js';
 import { traceOrMiss } from './trace.js';
 import { auditPolicy, formatAuditReport } from '../engine/policy-audit.js';
 import { findRepoRoot, toRepoRelative } from '../runtime/paths.js';
-import { readFacts, DEFAULT_LINE_LIMIT } from '../runtime/repo-facts.js';
+import { readFacts, DEFAULT_LINE_LIMIT, componentDocsHint } from '../runtime/repo-facts.js';
 import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
 import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
 import { judge, missingConfig } from '../runtime/guard.js';
@@ -54,12 +54,14 @@ import {
 } from './standards.js';
 import { runDoctor } from './doctor.js';
 import { runRedlinesInit } from './redlines.js';
+import { runLayersInit } from './layers-init.js';
+import { runBootstrap } from './bootstrap.js';
 import { loadStandards } from '../standards/loader.js';
 
 const HELP = `
 repo-guard —— 仓库体检与影响面工具（零服务端）
 
-  repo-guard init [--write]        扫一遍仓库：报告问题，--write 生成配置
+  repo-guard init [--write] [--all] 体检；--write 写 repo-facts；--all 一次铺齐全部控制文件
   repo-guard scan [--json]         体量与结构体检（超长文件、循环依赖）
   repo-guard check <文件…>          改动自查：碰没碰公共层和红线，有问题非零退出
   repo-guard impact <文件>          改它会波及哪些入口
@@ -78,6 +80,7 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard standards init [--write] 铺开五端研发规范模板（默认只提醒，不拦）
   repo-guard standards audit       规范体检：有没有守空气、有没有被静默降级
   repo-guard doctor                配置体检：填完配置跑它，查 JSON 坏没坏、条目会不会静默失效
+  repo-guard layers [init [--write]] 七层分类；init 铺人审/合并门禁/事实片段
   repo-guard mcp                   作为 stdio MCP 给 AI 用
   repo-guard hook <name>           插件钩子（由宿主调用）
 `;
@@ -165,8 +168,16 @@ async function main(): Promise<number> {
       const handle = await getGraph(repoDir);
       const facts = readFacts(repoDir);
       const sr = scan(repoDir, handle.graph, facts?.lineLimit ?? DEFAULT_LINE_LIMIT);
-      outText(renderInit(repoDir, handle, sr, { write: argv.includes("--write") }).text);
-      return 0;
+      const write = argv.includes('--write');
+      const all = argv.includes('--all');
+      const initText = renderInit(repoDir, handle, sr, { write }).text;
+      if (!all) {
+        outText(initText);
+        return 0;
+      }
+      const extra = runBootstrap(repoDir, write);
+      outText(initText + extra.text);
+      return extra.exitCode;
     }
 
     case 'scan': {
@@ -294,7 +305,7 @@ async function main(): Promise<number> {
       const info = loadLibrary(repoDir, facts?.componentLibrary ?? null);
       recordLibSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'lib_search' });
-      outText(`\n${renderLibSearch(info, intent, flagNumber(argv, "--limit", 5))}`);
+      outText(`\n${appendDocsHint(renderLibSearch(info, intent, flagNumber(argv, "--limit", 5)), facts)}`);
       return 0;
     }
 
@@ -401,6 +412,27 @@ async function main(): Promise<number> {
       return r.exitCode;
     }
 
+    case 'layers': {
+      const sub = positionals(argv, 1)[0];
+      if (sub === 'init') {
+        const r = runLayersInit(repoDir, argv.includes('--write'));
+        outText(r.text);
+        return r.exitCode;
+      }
+      outText(
+        '\n七层（开发者往 layers/ 加内容，详见 docs/DESIGN-SEVEN-LAYERS.md）\n\n' +
+          '  1 工程事实     layers/facts/           CODEBUDDY.md + rules\n' +
+          '  2 技能库       skills/                 T2 索引 / T6 正文\n' +
+          '  3 红线         layers/redlines/        T7a deny 或人审 ask\n' +
+          '  4 过程门禁     layers/process-gates/   ReAct 内机器关\n' +
+          '  5 人审         layers/human-review/    T7b ask，默认关\n' +
+          '  6 合并门禁     layers/merge-gates/     非 ReAct：CI / permissions.ask\n' +
+          '  7 图谱         layers/graph/ + src/graph/  MCP + require_tool；源码在本仓\n\n' +
+          '铺项目骨架：repo-guard layers init [--write]\n',
+      );
+      return 0;
+    }
+
     default:
       err(`未知命令：${cmd}`);
       outText(HELP);
@@ -414,6 +446,11 @@ async function main(): Promise<number> {
  * 尾注那句话是这个工具存在的理由：**内部组件库不在模型训练数据里**。
  * 模型会凭 antd / MUI 的经验写 props，名字对、类型错，要到运行时才炸。
  */
+function appendDocsHint(body: string, facts: ReturnType<typeof readFacts>): string {
+  const h = componentDocsHint(facts);
+  return h ? body + '\n\n' + h : body;
+}
+
 function renderLibSearch(
   info: ReturnType<typeof loadLibrary>,
   intent: string,

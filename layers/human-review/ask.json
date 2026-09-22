@@ -1,0 +1,5 @@
+{
+  "_": "人审。enabled=false 时红线仍 deny。打开后 onRedline=ask 会弹确认。未查 impact / 循环 / 禁改仍直接拒绝。",
+  "enabled": false,
+  "onRedline": "ask"
+}

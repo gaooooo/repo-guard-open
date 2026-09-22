@@ -141,7 +141,7 @@ export function judgeRedline(
   toolInput: WriteToolInput,
   extraRules: PolicyRule[] = [],
 ): AdmissionVerdict {
-  const l1 = cfg.gates.L1_admission;
+  const l1 = cfg.gates.admission;
   if (!l1 && !extraRules.length) return PASS;
 
   let before: string | null = null;
@@ -242,7 +242,7 @@ export function judgeScope(
   cfg: GuardConfig,
   rel: string,
 ): AdmissionVerdict {
-  if (!cfg.gates.L1_admission || !cfg.scopeGate.enabled) return PASS;
+  if (!cfg.gates.admission || !cfg.scopeGate.enabled) return PASS;
 
   const allow = cfg.scopeGate.allowlist.map(normalizePrefix).filter(Boolean);
   if (allow.length) {

@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DIR = path.join(ROOT, 'src', 'engine', 'graph', 'analyzers');
+const DIR = path.join(ROOT, 'src', 'graph', 'analyzers');
 const PY = path.join(DIR, 'py_graph.py');
 const TS = path.join(DIR, 'py-graph-source.ts');
 

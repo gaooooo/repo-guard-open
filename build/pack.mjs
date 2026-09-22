@@ -7,7 +7,7 @@
  *
  *     本仓（插件源码）
  *         ↓  npm run pack
- *     模板包  ──分发──▶ 部门：解压，填 templates/（红线、规范、清单）
+ *     模板包  ──分发──▶ 部门：解压，填 layers/（红线、规范、门禁）
  *                          ↓  分发
  *                      个人项目：在 <repo>/.codebuddy/ 里做个性化定制
  *
@@ -61,7 +61,7 @@ const SKIP_SMOKE = argv.includes('--skip-smoke');
  * 进包清单。**白名单，不是黑名单。**
  *
  * `required` 的项缺失即失败 —— 缺了它们包是坏的，而坏在哪不明显：
- * 少了 templates/ 的包装上之后 `standards init` 会说"找不到规范模板"，
+ * 少了 layers/ 的包装上之后 `standards init` 会说"找不到规范模板"，
  * 少了 hooks/ 的包则完全不报错，只是一道门都不生效。
  */
 const MANIFEST = [
@@ -80,14 +80,9 @@ const MANIFEST = [
   { src: 'skills', required: true, why: '技能' },
   { src: 'commands', required: true, why: '斜杠命令' },
   { src: 'agents', required: true, why: '子代理' },
-  { src: 'output-styles', required: false, why: '输出风格（当前为占位）' },
 
   // ── 部门要填的就是这里 ──
-  { src: 'templates', required: true, why: '全局层配置。部门的全部工作都在这个目录里' },
-
-  // ── 宿主识别但未加载到运行时，plugin.json 的 _experimental 引用了它们 ──
-  { src: 'themes', required: false, why: 'plugin.json 的注释指向它，不带会变成死链' },
-  { src: 'monitors', required: false, why: '同上' },
+  { src: 'layers', required: true, why: '七层作者面 + 全局层 JSON（规范/红线/门禁模板）' },
 
   // ── 文档 ──
   { src: 'docs', required: true, why: '部门会拿着它做二次分发说明' },
@@ -160,7 +155,7 @@ function countFiles(dir) {
 /**
  * 反向断言：包里不许出现 FORBIDDEN 里的任何名字。
  *
- * 递归查而不是只查顶层 —— `templates/` 里将来完全可能被人塞一个 package.json
+ * 递归查而不是只查顶层 —— `layers/` 里将来完全可能被人塞一个 package.json
  * 当示例，而那一个文件就足以让整个产物按 ESM 解析。
  */
 function assertNoStrays(dstRoot) {
@@ -185,8 +180,8 @@ function assertNoStrays(dstRoot) {
  *
  * 为什么打包完还要跑：`build.mjs` 的冒烟证明的是"产物在本仓能跑"，
  * 而这里要证明的是"**产物在包的目录布局下**能跑"。两者不是一回事 ——
- * `standardsTemplateDir()` 用的是 `resolve(__dirname, '..', 'templates')`，
- * 它依赖 bin/ 与 templates/ 是兄弟目录。白名单里少写一行 templates，
+ * `standardsTemplateDir()` 用的是 `resolve(__dirname, '..', 'layers')`，
+ * 它依赖 bin/ 与 layers/ 是兄弟目录。白名单里少写一行 layers，
  * 产物照样启动、帮助照样打印，只有规范会静默消失。
  */
 function smoke(dstRoot) {
@@ -198,7 +193,7 @@ function smoke(dstRoot) {
     die(`冒烟①失败：产物跑不起来或帮助输出不对\n${help.stderr || help.stdout}`);
   }
 
-  // ② templates/ 在包内的相对位置正确。
+  // ② layers/skills/standards 在包内的相对位置正确。
   //    在临时目录里跑（不带 --write，一个字节都不写），避免 findRepoRoot 走到本仓
   const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-guard-pack-'));
   try {
@@ -209,8 +204,8 @@ function smoke(dstRoot) {
     const out = `${init.stdout ?? ''}${init.stderr ?? ''}`;
     if (/找不到规范模板/.test(out)) {
       die(
-        '冒烟②失败：包内找不到 templates/standards/。\n' +
-          '        bin/ 与 templates/ 必须是兄弟目录 —— 检查 MANIFEST 里的 templates 项。',
+        '冒烟②失败：包内找不到 layers/skills/standards/。\n' +
+          '        bin/ 与 layers/ 必须是兄弟目录 —— 检查 MANIFEST 里的 layers 项。',
       );
     }
     if (init.status !== 0) die(`冒烟②失败：standards init 退出码 ${init.status}\n${out}`);
@@ -289,7 +284,7 @@ function main() {
        内容    ${copied.length} 个顶层项，${files} 个文件，${kb} KB${skipped.length ? `\n       未带    ${skipped.join(' ')}（可选项，本仓没有）` : ''}
        冒烟    ${smokeResult}
 
-       部门拿到之后：读 templates/CONFIG.md，填完跑 bin/repo-guard doctor。
+       部门拿到之后：读 layers/CONFIG.md，填完跑 bin/repo-guard doctor。
 `);
 }
 

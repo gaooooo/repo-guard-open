@@ -77,7 +77,11 @@ export interface NoRefactorEntry {
 export interface PolicyDoc {
   red_lines: PolicyRule[];
   no_refactor: NoRefactorEntry[];
-  /** Agent 必须停下来问人的场景（纯文本，注入 prompt 供 LLM 自觉） */
+  /**
+   * Agent 必须停下来问人的场景（纯文本，注入 prompt 供 LLM 自觉）。
+   * 新写请放 `.codebuddy/facts.json` 的 `stopConditions`。
+   * 本字段仍从 redlines.json 读入，注入时与 facts 合并，避免旧仓静默失效。
+   */
   stop_conditions: string[];
 }
 

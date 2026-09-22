@@ -25,10 +25,10 @@ import {
   renderApiContractsAsTs,
   renderSimilar,
   type ReportContext,
-} from '../engine/graph-report.js';
+} from '../graph/graph-report.js';
 import { auditPolicy, formatAuditReport } from '../engine/policy-audit.js';
 import { findRepoRoot, toRepoRelative } from '../runtime/paths.js';
-import { DEFAULT_LINE_LIMIT, readFacts } from '../runtime/repo-facts.js';
+import { DEFAULT_LINE_LIMIT, readFacts, componentDocsHint } from '../runtime/repo-facts.js';
 import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
 import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
 import { judge, missingConfig } from '../runtime/guard.js';
@@ -250,13 +250,14 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const info = loadLibrary(repoDir, facts?.componentLibrary ?? null);
       recordLibSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'lib_search' });
+      const docs = componentDocsHint(facts);
       if (!info.pkg) {
-        return '本仓没有识别到 UI 组件库。如果确实有，可以在 .codebuddy/repo-facts.json 里手动指定 componentLibrary。';
+        return '本仓没有识别到 UI 组件库。如果确实有，可以在 .codebuddy/repo-facts.json 里手动指定 componentLibrary。' + (docs ? '\n' + docs : '');
       }
       const hits = searchLibrary(info, intent, num(args.limit, 5));
       const head = `组件库 ${info.pkg} · 共 ${info.entries.length} 个导出 · 检索「${intent}」`;
       if (!hits.length) {
-        return `${head}\n\n没有相近的导出 —— 可以自己写，但仍建议先看仓内高扇入热点。`;
+        return `${head}\n\n没有相近的导出 —— 可以自己写，但仍建议先看仓内高扇入热点。` + (docs ? '\n' + docs : '');
       }
       const lines = [head, ''];
       for (const h of hits) {
@@ -267,6 +268,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
         '',
         '命中就别自己造。用之前先查它的 props —— 内部组件库不在模型训练数据里，凭经验写几乎一定错。',
       );
+      if (docs) lines.push('', docs);
       return lines.join('\n');
     }
 

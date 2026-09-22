@@ -48,7 +48,7 @@ import { judgeRedline, judgeScope, noteTouched, type WriteToolInput } from '../g
 import { judgeGraphEnforce } from '../gates/graph-enforce.js';
 import { judgeLoop, iterationNote, noteToolResult } from '../gates/loop.js';
 import { isDeliveryAction, judgeDelivery, noteEvidence, recordFinalSignal } from '../gates/delivery.js';
-import { restateNote } from '../gates/restate.js';
+import { loadHumanReview, redlineShouldAsk } from '../layers/human-review.js';
 import { loadStandards, type StandardsSnapshot } from '../standards/loader.js';
 import {
   compileBlockRules,
@@ -97,6 +97,18 @@ function emitDeny(event: string, reason: string): void {
       hookSpecificOutput: {
         hookEventName: event,
         permissionDecision: 'deny',
+        permissionDecisionReason: reason,
+      },
+    }),
+  );
+}
+
+function emitAsk(event: string, reason: string): void {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: event,
+        permissionDecision: 'ask',
         permissionDecisionReason: reason,
       },
     }),
@@ -195,7 +207,8 @@ function sessionStart(input: HookInput): void {
   // guard 配置不存在时 buildInjection 只产出公共层那一段，
   // 与接入 L0 之前的输出逐字节相同 —— 铁律 ④
   const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
-  const all = [text, std].filter(Boolean).join('\n\n');
+  const factNote = '工程事实长文见仓库根 CODEBUDDY.md（本段只注机器摘要）。';
+  const all = [text, factNote, std].filter(Boolean).join('\n\n');
   if (all) emitContext('SessionStart', all);
 }
 
@@ -219,7 +232,7 @@ function postCompact(input: HookInput): void {
 }
 
 /**
- * 用户提交提问：按任务类型注入必读清单 + 相关规范正文 + 需求复述提醒。
+ * 用户提交提问：按任务类型注入必读清单 + 相关规范正文。
  *
  * ⚠️ **绝不能阻塞。** `continue:false` 会把用户的提问整个吃掉，
  * 代价远大于任何收益。
@@ -234,8 +247,6 @@ function userPromptSubmit(input: HookInput): void {
   if (routed) parts.push(routed);
   const std = promptSegment(standardsOf(repoDir, readFacts(repoDir)), prompt);
   if (std) parts.push(std);
-  const restated = restateNote(cfg, repoDir, prompt);
-  if (restated) parts.push(restated);
 
   if (parts.length) emitContext('UserPromptSubmit', parts.join('\n\n'));
 }
@@ -281,11 +292,14 @@ function preWrite(input: HookInput): void {
   const red = judgeRedline(repoDir, snapshot, cfg, rel, input.tool_input ?? {}, stdRules);
   if (red.blocked) {
     const fromStandards = red.ruleId?.startsWith('STD-') === true;
-    record(fromStandards ? 'standards_deny' : red.kind === 'no_refactor' ? 'no_refactor_deny' : 'redline_hit', repoDir, {
+    const human = loadHumanReview(repoDir);
+    const ask = red.kind === 'redline' && redlineShouldAsk(human);
+    record(fromStandards ? 'standards_deny' : red.kind === 'no_refactor' ? 'no_refactor_deny' : ask ? 'redline_ask' : 'redline_hit', repoDir, {
       file: rel,
       rule: red.ruleId,
     });
-    emitDeny('PreToolUse', red.reason!);
+    if (ask) emitAsk('PreToolUse', red.reason!);
+    else emitDeny('PreToolUse', red.reason!);
     return;
   }
 

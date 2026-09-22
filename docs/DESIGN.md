@@ -319,7 +319,7 @@ CodeBuddy 落点：所有 hook 往 `$HOME/.repo-guard/metrics.ndjson` 追加，`
 
 deerclaw：`src/agent/requirement-restate.ts`，是七道门之外的独立一环，**默认开、零阻塞**，失败即放行只落库留痕。判据：复述/原文长度比在 [0.7, 1.3]、无结构性问题（有条件无结果 / 前后矛盾 / 主次颠倒）、无指代未决。核心指标是 `corrected`（用户下一条是否在纠错）。
 
-CodeBuddy 落点：`UserPromptSubmit` hook（可用 `type: prompt` 让小模型判），只写 metrics，不拦。
+本插件**不实现**，相关代码已删除。CodeBuddy 落点曾考虑 `UserPromptSubmit`，产品判定本地启发式收益低且会占提问钩子，故不搬。
 
 ### 3.3 全景控制项 → 落点总表
 
@@ -339,7 +339,7 @@ CodeBuddy 落点：`UserPromptSubmit` hook（可用 `type: prompt` 让小模型�
 | 循环防护 | 约束 | 硬 | `PostToolUse` 计数 + `PreToolUse` 短路 | P4 |
 | 交付校验 | 约束 | 硬 | `Stop` hook | P4，默认关 |
 | Manager Playbook | 流程 | 软 | — | 不搬 |
-| 需求复述 | 流程 | 零阻塞留痕 | `UserPromptSubmit` | P4 |
+| 需求复述 | 流程 | 零阻塞留痕 | --- | **不搬（已删除）** |
 | 群绑定 | 流程 | — | — | 不搬（无 IM） |
 | 治理总览 | 横切 | 留痕 | metrics.ndjson + `governance` 命令 | P5 |
 
@@ -679,7 +679,7 @@ REPO_GUARD_DEBUG / DEBUG                   调试开关
 | 红线数据源 | 数据库，**保存即生效** | 仓库文件，跟 commit 走 | **各有优劣**：平台改完即生效；文件版与代码零延迟锚定、可 review、可回溯 |
 | 按 agent 维度降噪 | 专家只看自己引用的仓 | 无（只有一个仓） | **不适用** |
 | 范围门 / 循环门 / 交付门 | 有，硬拦 | P4，映射见 §3.2 | **部分等同**（迭代预算只能近似） |
-| 需求复述 | 有，零阻塞留痕 | P4 | **等同** |
+| 需求复述 | 有，零阻塞留痕 | --- | **不搬（已删除）** |
 | **执行环境** | | | |
 | 沙箱 / 危险命令 | 平台 `bash-tool.ts` | **宿主承担**（`permissions` + `sandbox`） | **等同或更强**（宿主有 6 种权限模式 + 自然语言分类器） |
 | 每 agent 独立 HOME | 有，含凭据物化 | 无 | **不适用**（单人单机） |

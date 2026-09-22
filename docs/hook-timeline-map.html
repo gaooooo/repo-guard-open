@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent 时间轴 × 24 Hook × 资料分类</title>
+<style>
+:root{
+  --bg:#07090d;--ink:#e9eef5;--muted:#8b9aab;--dim:#5d6e80;--line:#243140;--line2:#3a5168;
+  --fact:#5eead4;--skill:#93c5fd;--red:#f87171;--gate:#fbbf24;--human:#f9a8d4;--merge:#c4b5fd;--graph:#86efac;--host:#38bdf8;
+  --mono:"IBM Plex Mono","SF Mono",ui-monospace,Menlo,monospace;
+  --sans:"IBM Plex Sans","Noto Sans SC","PingFang SC","Hiragino Sans GB",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+body{background-image:radial-gradient(900px 400px at 0 -8%,rgba(94,234,212,.07),transparent 50%)}
+.wrap{max-width:1280px;margin:0 auto;padding:24px 24px 72px}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--fact);text-transform:uppercase}
+h1{font-size:28px;margin:8px 0 8px;letter-spacing:-.02em}
+h2{font-size:18px;margin:28px 0 8px}
+.lede{color:var(--muted);line-height:1.65;max-width:860px;font-size:14.5px}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 8px}
+.lg{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;border:1px solid var(--line);border-radius:999px;padding:4px 10px;background:#121922}
+.lg.on{border-color:var(--c,var(--fact));color:var(--ink)}
+.lg i{width:8px;height:8px;border-radius:50%;background:var(--c);display:inline-block}
+.filters-note{font-size:12px;color:var(--dim);margin-bottom:12px}
+.phase{margin:18px 0;padding:12px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,#141c26,#10171f)}
+.phase h3{margin:0 0 10px;font-size:13px;font-family:var(--mono);color:var(--fact);letter-spacing:.06em}
+.t7{border-color:#5b3a2e;background:linear-gradient(180deg,#1a1412,#12100f)}
+.t7 h3{color:var(--red)}
+.row{display:grid;grid-template-columns:88px 1fr;gap:10px;margin:8px 0}
+.time{font-family:var(--mono);font-size:11px;color:var(--dim);padding-top:12px}
+.nodes{display:flex;flex-wrap:wrap;gap:8px}
+.node{width:calc(25% - 8px);min-width:200px;flex:1 1 200px;border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:#0e151c;cursor:pointer}
+.node:hover,.node.on{border-color:var(--line2);background:#15202b}
+.node.ghost{opacity:.55}
+.node.dim{opacity:.22}
+.node .hn{font-family:var(--mono);font-size:12px;color:var(--ink)}
+.node .blk{font-size:10px;font-family:var(--mono);color:var(--dim);margin-left:6px}
+.node p{margin:6px 0 0;font-size:12px;color:var(--muted);line-height:1.45}
+.dots{margin-top:8px;display:flex;flex-wrap:wrap;gap:5px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.nh{border-style:dashed;border-color:#3d5a6e}
+.human{border-color:#6b3d5c}
+.host{border-color:#1e5a72}
+.merge{border-style:dashed;border-color:#5b4a86}
+.detail{display:none;margin-top:10px;padding:12px 14px;border:1px dashed var(--line2);border-radius:10px;background:rgba(8,12,18,.6);font-size:13px;color:var(--muted);line-height:1.6}
+.detail.show{display:block}
+.detail b{color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:12px;color:var(--dim);padding:8px;border-bottom:1px solid var(--line);background:#101820}
+td{padding:8px;border-bottom:1px solid var(--line);color:var(--muted);vertical-align:top}
+td:first-child{color:var(--ink);font-weight:600}
+.panel{border:1px solid var(--line);border-radius:14px;overflow:auto}
+.note{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.55}
+footer{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+.flow{font-family:var(--mono);font-size:12px;color:var(--muted);padding:8px 2px 12px}
+@media (max-width:800px){.node{min-width:100%}.row{grid-template-columns:1fr}}
+
+.board{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:16px;align-items:start}
+.bypass{position:sticky;top:12px;border:1px dashed #5b4a86;border-radius:14px;padding:12px;background:linear-gradient(180deg,#161222,#101018)}
+.bypass h3{margin:0 0 8px;font-size:13px;font-family:var(--mono);color:var(--merge);letter-spacing:.04em}
+.bypass .hint{font-size:12px;color:var(--dim);line-height:1.5;margin:0 0 10px}
+.react{border:1px solid #3a5a4a;border-radius:14px;padding:12px;margin:18px 0;background:linear-gradient(180deg,#102018,#0d1512)}
+.react-label{font-family:var(--mono);font-size:12px;color:var(--graph);margin-bottom:10px;line-height:1.5}
+.pipeline{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 12px}
+.pip{font-family:var(--mono);font-size:11px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:#0e151c}
+.pip.a{border-color:#7a3b3b;color:var(--red)}
+.pip.b{border-color:#6b3d5c;color:var(--human)}
+.pip.c{border-color:#1e5a72;color:var(--host)}
+.pip.d{border-color:#2d6a45;color:var(--graph)}
+.pip.e{border-color:#7a5b20;color:var(--gate)}
+.arr{color:var(--dim);font-family:var(--mono)}
+.loopbar{margin-top:12px;padding:10px 12px;border-radius:10px;border:1px dashed #3a5a4a;font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.7}
+.loopbar b{color:var(--graph)}
+@media (max-width:980px){.board{grid-template-columns:1fr}}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">24-hook draft · new file</div>
+  <h1>Agent 执行时间轴 × 控制节点 × 资料分类</h1>
+  <p class="lede">T0-T11 是附件 CONTROL-POINTS.md §1.2 给 Agent 会话标的时刻，不是 L0-L6。主图按生命周期 hook 展开。T7 工具簇拆开。技能库在主图上是一个蓝点，六份规范明细见附表。虚线框不是 hook。</p>
+  <div class="panel" style="margin:14px 0 8px">
+    <table>
+      <thead><tr><th>时刻</th><th>是什么</th><th>有没有 hook</th><th>本分类写不写资料</th></tr></thead>
+      <tbody>
+        <tr><td>T0</td><td>进程启动：环境变量、CLI（--permission-mode、--plugin-dir）</td><td>无</td><td>不写。机器怎么启动，不是规范内容。</td></tr>
+        <tr><td>T1</td><td>配置装配：settings 四层合并；hooks 注册表在此刻拍快照；目录信任检查</td><td>无</td><td>不写。改的是宿主配置，不是工程事实/技能/红线正文。</td></tr>
+        <tr><td>T2</td><td>扩展发现：插件、skill、MCP、LSP、bin 入场</td><td>无（注册本身不是 hook）</td><td>技能库索引、图谱/组件 MCP 在这里登记。</td></tr>
+        <tr><td>T3</td><td>上下文装配：CODEBUDDY.md、.codebuddy/rules；skill 只装 name+description</td><td>无</td><td>工程事实主入口。</td></tr>
+        <tr><td>T4</td><td>会话开启</td><td>SessionStart</td><td>公共层、红线摘要、停止条件（何时问人，自觉）。</td></tr>
+        <tr><td>T5</td><td>用户提交提问</td><td>UserPromptSubmit</td><td>按任务点名 skill、补「去读」路径。</td></tr>
+        <tr><td>T6</td><td>模型决策：skill 正文展开；条件规则命中才注入</td><td>InstructionsLoaded</td><td>技能正文；rules 的 paths 条件事实。</td></tr>
+        <tr><td>T7</td><td>工具调用（拦 → 人审 → 宿主执行 → 跑 → 写后）</td><td>Pre/PostToolUse 等</td><td>过程门禁、红线、人审、图谱调用。</td></tr>
+        <tr><td>T8</td><td>子代理、工作树、MCP 问人</td><td>Subagent* / Elicitation* 等</td><td>人审（MCP）；多数编码主路径轻。</td></tr>
+        <tr><td>T9</td><td>上下文压缩</td><td>PreCompact / PostCompact</td><td>压缩后必须重注工程事实。</td></tr>
+        <tr><td>T10</td><td>本轮停止（可打回 T6）</td><td>Stop / StopFailure</td><td>过程门禁提醒；不在这里硬拦 commit。</td></tr>
+        <tr><td>T11</td><td>会话结束</td><td>SessionEnd</td><td>治理留痕，不进 git。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">原先主图从 T2 起画，是因为 T0/T1 没有 12 类资料的写入点。下面补了 T0/T1 两站，标成「不落资料」。T0-T11 是会话时刻；L0-L6 是质量问题分层，两套不要混。</p>
+
+  <div class="legend" id="legend"></div>
+  <div class="filters-note">点图例只看该类落在哪些站。点站看写入切片。</div>
+
+  <div class="board"><div class="main">
+  <div class="phase">
+    <h3>T0-T1 启动与配置（不落 12 类资料）</h3>
+    <div class="row"><div class="time">T0</div><div class="nodes" data-slot="t0"></div></div>
+    <div class="row"><div class="time">T1</div><div class="nodes" data-slot="t1"></div></div>
+  </div>
+  <div class="phase">
+    <h3>T2-T3 入场（非 hook，否则工程事实和技能注册没有站）</h3>
+    <div class="row"><div class="time">T2</div><div class="nodes" data-slot="t2"></div></div>
+    <div class="row"><div class="time">T3</div><div class="nodes" data-slot="t3"></div></div>
+  </div>
+
+  <div class="phase">
+    <h3>T4 会话开启（每轮循环之外，只发生一次/恢复时）</h3>
+    <div class="row"><div class="time">T4</div><div class="nodes" data-slot="t4"></div></div>
+  </div>
+
+  <div class="react">
+    <div class="react-label">每轮 ReAct（在会话内循环）<br>T5 提问 → T6 决策 → T7 工具（拦→人审→宿主执行→跑→写后）→ T10 Stop<br><b>↺</b> Stop continue:false 回到 T6 &nbsp;&nbsp; <b>↓</b> 正常结束：下一轮从 T5，或出圈到 T11</div>
+    <div class="phase" style="margin-top:0">
+    <h3>T5-T6 每轮入口</h3>
+    <div class="row"><div class="time">T5</div><div class="nodes" data-slot="t5"></div></div>
+    <div class="row"><div class="time">T6</div><div class="nodes" data-slot="t6"></div></div>
+  </div>
+
+  <div class="phase t7">
+    <h3>T7 工具簇（ReAct 内，必须拆开）</h3>
+    <div class="pipeline">
+      <span class="pip a">1 拦 PreToolUse</span><span class="arr">→</span>
+      <span class="pip b">2 人审 PermissionRequest</span><span class="arr">→</span>
+      <span class="pip c">3 宿主执行 L2</span><span class="arr">→</span>
+      <span class="pip d">4 跑工具</span><span class="arr">→</span>
+      <span class="pip e">5 写后 PostToolUse</span>
+    </div>
+    <div class="row"><div class="time">T7a 拦</div><div class="nodes" data-slot="t7a"></div></div>
+    <div class="row"><div class="time">T7b 人审</div><div class="nodes" data-slot="t7b"></div></div>
+    <div class="row"><div class="time">T7c 宿主</div><div class="nodes" data-slot="t7c"></div></div>
+    <div class="row"><div class="time">T7d 跑</div><div class="nodes" data-slot="t7d"></div></div>
+    <div class="row"><div class="time">T7e 写后</div><div class="nodes" data-slot="t7e"></div></div>
+  </div>
+
+  <div class="phase">
+    <h3>T8 子代理 / 工作树 / MCP 问人（可插在一轮中间）</h3>
+    <div class="row"><div class="time">T8</div><div class="nodes" data-slot="t8"></div></div>
+  </div>
+
+    <div class="loopbar">
+      <b>↺ T10 → T6</b> Stop 返回 continue:false 时，reason 进 history，同一轮回到 T6 继续决策（须同一 reason 去重，否则死循环）。<br>
+      <b>↓ T10 正常结束</b> 出内圈：用户再提问则从 T5 开下一轮；会话关掉则到 T11。
+    </div>
+    <div class="row"><div class="time">T10</div><div class="nodes" data-slot="t10"></div></div>
+  </div>
+
+  <div class="phase">
+    <h3>T9 压缩（可发生在两轮之间，不是旁路）</h3>
+    <div class="row"><div class="time">T9</div><div class="nodes" data-slot="t9"></div></div>
+  </div>
+  <div class="phase">
+    <h3>T11 出圈：会话结束</h3>
+    <div class="row"><div class="time">T11</div><div class="nodes" data-slot="t11"></div></div>
+  </div>
+
+  <div class="detail" id="detail"></div>
+</div>
+<aside class="bypass">
+  <h3>非 ReAct 旁路</h3>
+  <p class="hint">合并门禁不在 T5-T10 循环里，也不属于 T9-T11。人在终端 commit、CI 合入主干时才发生。Agent 轮次可以一次都没跑完 lint。</p>
+  <div class="nodes" data-slot="side"></div>
+</aside>
+</div>
+
+  <h2>rules 算哪一类？</h2>
+  <p class="lede" style="margin-bottom:10px">分类表里没有单独写 rules，因为它不是第十二类资料，而是工程事实的第二种写入节点（和 CODEBUDDY.md 同属上下文注入）。</p>
+  <div class="panel">
+    <table>
+      <thead><tr><th>写入节点</th><th>何时进上下文</th><th>该放工程事实里的哪一段</th></tr></thead>
+      <tbody>
+        <tr><td>CODEBUDDY.md</td><td>T3 全量注入</td><td>每次都要看见的短合集：公共层、包名、权威源路径。</td></tr>
+        <tr><td>.codebuddy/rules/*.md</td><td>alwaysApply:true 则同 T3；false+paths 则 T6 碰到匹配文件才注入一次</td><td>模块/端专属事实，避免根文件膨胀。例如只在改 css/tsx 时注入 UI token 路径。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">不要把技能正文、红线清单、门禁脚本写进 rules。skill 走 skills/；红线走结构化规则+PreToolUse；门禁走 hook。rules 只承载「仍是事实、但不必每次提问都常驻」的那一层。</p>
+  <h2>附表：技能库一个色点的明细</h2>
+  <p class="lede" style="margin-bottom:10px">主图 T2 注册索引、T6 展开正文。大块 API 不进 skill，T7d 用 MCP 拉。</p>
+  <div class="panel">
+    <table>
+      <thead><tr><th>技能文档</th><th>正文只写</th><th>事实已剪到工程事实</th><th>T7 常挂的工具</th></tr></thead>
+      <tbody>
+        <tr><td>架构规范</td><td>怎么改模块边界、何时不许动公共层</td><td>分层方向、公共层目录、架构长文路径</td><td>图谱 impact</td></tr>
+        <tr><td>编码规范</td><td>怎么写、怎么拆文件</td><td>本仓语言/目录惯例</td><td>写后 lint 回灌（LSP/PostToolUse）</td></tr>
+        <tr><td>接口规范</td><td>怎么加可选字段、怎么对名字</td><td>契约权威源路径</td><td>trace / contracts / impact</td></tr>
+        <tr><td>提交规范</td><td>怎么填 MR、怎么跑本地校验</td><td>主分支名、MR 要写哪些项</td><td>不在 Stop 硬拦；合并门禁在旁路</td></tr>
+        <tr><td>组件规范</td><td>怎么选用、必须先查文档</td><td>包名、用哪套库</td><td>组件文档 MCP、lib_search、hot</td></tr>
+        <tr><td>UI 规范</td><td>怎么按规范落地页面</td><td>设计稿/token 路径</td><td>组件文档 MCP；色值提醒走 PostToolUse</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">红线：真 diff 里 protects 次数变少 → T7a deny（人审开关打开 → T7b ask）。意图不清收不成符号 → T4 stopConditions，不是红线。过 lint 才能交 → 旁路合并门禁，不画进 Stop。</p>
+
+  <footer>新文件，不替换 quality-control-process.html。控制节点口径：docs/CONTROL-POINTS.md §3.2。资料分类：工程事实 / 技能库 / 红线 / 过程门禁 / 人审 / 合并门禁 / 图谱。</footer>
+</div>
+<script>
+(function(){
+  var CATS=[
+    {id:"fact",name:"工程事实",c:"var(--fact)"},
+    {id:"skill",name:"技能库",c:"var(--skill)"},
+    {id:"red",name:"红线",c:"var(--red)"},
+    {id:"gate",name:"过程门禁",c:"var(--gate)"},
+    {id:"human",name:"人审",c:"var(--human)"},
+    {id:"merge",name:"合并门禁",c:"var(--merge)"},
+    {id:"graph",name:"图谱",c:"var(--graph)"}
+  ];
+  var NODES=[
+    {slot:"t0",id:"boot",name:"进程启动",hook:false,blk:"非 hook",cls:"nh",cats:[],p:"环境变量、CLI。权限模式、plugin-dir 在这里定。",d:"T0。没有工程事实/技能/红线可写。改的是怎么拉起 CodeBuddy。"},
+    {slot:"t1",id:"cfg",name:"配置装配 / hooks 快照",hook:false,blk:"非 hook",cls:"nh",cats:[],p:"settings 合并；hooks 注册表拍快照。之后改 hooks.json 要 /hooks 审查。",d:"T1。仍不落 12 类资料。规则正文不写在这里，只决定后面哪些 hook 在场。"},
+    {slot:"t2",id:"reg-skill",name:"技能/MCP 注册",hook:false,blk:"非 hook",cls:"nh",cats:["skill","graph"],p:"skills 只登记 name+description；图谱与组件文档 MCP 入场。",d:"能力封装站。技能库六个规范在这里只出现一个蓝点。组件 API 语料挂 MCP，不算技能正文。"},
+    {slot:"t3",id:"cbmd",name:"CODEBUDDY.md / rules",hook:false,blk:"非 hook · 全量注入",cls:"nh",cats:["fact"],p:"工程事实：常驻进 CODEBUDDY.md；按路径拆的进 .codebuddy/rules。",d:"知识库写入点有两个：根 CODEBUDDY.md（每次都见）和 rules（alwaysApply:false + paths，T6 才注入）。插件不能分发这两类文件，要进仓库。"},
+    {slot:"t4",id:"SessionStart",name:"SessionStart",hook:true,blk:"可注入",cats:["fact","red","gate","human"],p:"再推公共层、红线摘要、stopConditions（何时问人，自觉）。压缩后必须重注。",d:"hook。停止条件不是红线：没有 protects，不 deny。与 T3 叠内容时只补插件侧摘要。matcher: startup/resume/clear/compact。"},
+    {slot:"t5",id:"UserPromptSubmit",name:"UserPromptSubmit",hook:true,blk:"可注入 / 可拦提问",cats:["skill","fact"],p:"按任务点名 skill；可补「去读」路径。禁止 continue:false 吃提问。",d:"按任务推。长文仍不烤进来。"},
+    {slot:"t6",id:"InstructionsLoaded",name:"InstructionsLoaded",hook:true,blk:"观测",cats:["fact","skill"],p:"规则载入可观测；条件 rules 在 T6 触碰文件时才注入。",d:"子目录 CODEBUDDY.md、alwaysApply:false+paths 的模块事实在这一带生效。skill 正文也在模型决定调用时展开。"},
+    {slot:"t7a",id:"PreToolUse",name:"PreToolUse",hook:true,blk:"deny / ask / 改入参",cats:["gate","red","graph"],p:"过程门禁与红线硬拦。图谱 require_tool。不要往这里挂提醒。",d:"阶段 0 最高优先。红线：真 diff 里标识符次数变少 → deny（人审开则本步返回 ask）。循环短路也在这里。新建公共层放行。Bash 红线不硬拦。"},
+    {slot:"t7b",id:"PermissionRequest",name:"PermissionRequest",hook:true,blk:"观测/介入权限框",cls:"human",cats:["human"],p:"人审站：弹框出现。",d:"仅红线已经命中且 human-review 打开时，PreToolUse 返回 ask。不是「意图不清」分类器。宿主 permissions.ask（合入/生产）是合并门禁侧。"},
+    {slot:"t7b2",id:"Notification",name:"Notification",hook:true,blk:"观测",cls:"human",cats:["human"],p:"permission_prompt / idle。人审相关通知。",d:"编码主路径主要用 permission_prompt。"},
+    {slot:"t7c",id:"host-exec",name:"宿主执行 L2",hook:false,blk:"非 hook",cls:"host",cats:[],p:"sandbox / permissions.deny / 危险命令。插件夺不了权。",d:"夹在 PreToolUse 放行和工具真正跑之间。提交/生产可在宿主配 ask，那是人审+合并，不是过程门禁 deny。"},
+    {slot:"t7c2",id:"PermissionDenied",name:"PermissionDenied",hook:true,blk:"可 retry:true",cls:"host",cats:["human","gate"],p:"被 auto 分类器拒绝。",d:"可告知模型换方式重试。不是资料分类的主写入口。"},
+    {slot:"t7d",id:"tool-run",name:"工具执行",hook:false,blk:"非 hook",cls:"nh",cats:["graph","skill"],p:"impact/trace/similar、组件文档 MCP、Write/Bash 在这里跑。",d:"技能库「必须先查文档」在这里兑现为 MCP 调用。图谱现算也在这里，禁止在 hook 里建图。"},
+    {slot:"t7e",id:"PostToolUse",name:"PostToolUse",hook:true,blk:"可替换结果/追加",cats:["gate","graph"],p:"超长/规范 remind；记下 queried。",d:"提醒走这里，不走 PreToolUse。"},
+    {slot:"t7e2",id:"PostToolUseFailure",name:"PostToolUseFailure",hook:true,blk:"可补上下文",cats:["gate"],p:"L3 失败计数。",d:"连败阈值默认关，计数可一直记。"},
+    {slot:"t7e3",id:"FileChanged",name:"FileChanged",hook:true,blk:"观测",cats:[],p:"磁盘变更。本阶段通常不落资料。",d:"外部改文件时可观测。"},
+    {slot:"t7e4",id:"CwdChanged",name:"CwdChanged",hook:true,blk:"观测",cats:["gate"],p:"模型 cd。可做越界观测。",d:"编码阶段轻量。"},
+    {slot:"t7e5",id:"ConfigChange",name:"ConfigChange",hook:true,blk:"观测",cats:[],p:"会话中配置文件变了。",d:"元层，不落 12 类资料。"},
+    {slot:"t8",id:"SubagentStart",name:"SubagentStart",hook:true,blk:"观测",cats:["skill"],p:"审查 agent 等入场。",d:"插件 agent 不能自带 hooks。"},
+    {slot:"t8",id:"SubagentStop",name:"SubagentStop",hook:true,blk:"可 continue:false",cats:["gate"],p:"子代理收工。",d:"frontmatter 的 Stop 会被重写到这里。"},
+    {slot:"t8",id:"TaskCreated",name:"TaskCreated",hook:true,blk:"观测",cats:[],p:"任务表。本阶段少用。",d:""},
+    {slot:"t8",id:"TaskCompleted",name:"TaskCompleted",hook:true,blk:"观测",cats:[],p:"任务完成。本阶段少用。",d:""},
+    {slot:"t8",id:"TeammateIdle",name:"TeammateIdle",hook:true,blk:"观测",cats:[],p:"团队空闲。编码单人场景基本不落。",d:""},
+    {slot:"t8",id:"WorktreeCreate",name:"WorktreeCreate",hook:true,blk:"环境准备",cats:[],p:"隔离工作树。",d:""},
+    {slot:"t8",id:"WorktreeRemove",name:"WorktreeRemove",hook:true,blk:"清理",cats:[],p:"工作树删除。",d:""},
+    {slot:"t8",id:"Elicitation",name:"Elicitation",hook:true,blk:"MCP 问人",cls:"human",cats:["human"],p:"MCP 要用户输入。",d:"人审的 MCP 形态。"},
+    {slot:"t8",id:"ElicitationResult",name:"ElicitationResult",hook:true,blk:"可改写",cls:"human",cats:["human"],p:"用户已答，待回传。",d:""},
+    {slot:"t9",id:"PreCompact",name:"PreCompact",hook:true,blk:"可阻断压缩",cats:["gate"],p:"一般不拦压缩。",d:"可把公共层标记为压缩后需重注。"},
+    {slot:"t9",id:"PostCompact",name:"PostCompact",hook:true,blk:"仅观测+再注入",cats:["fact","red","gate"],p:"必须重注工程事实与红线摘要。",d:"不补的话后半程守卫还在拦，模型会觉得随机。"},
+    {slot:"t10",id:"Stop",name:"Stop",hook:true,blk:"可强制继续",cats:["gate","merge"],p:"交付提醒。不要默认硬拦 commit。",d:"合并门禁只在这里提醒「这轮没看到 lint」，真卡在旁路 CI。continue:false 须去重。"},
+    {slot:"t10",id:"StopFailure",name:"StopFailure",hook:true,blk:"输出被忽略",cats:["gate"],p:"API 失败收场。只能留痕。",d:"L4 近似。"},
+    {slot:"t11",id:"SessionEnd",name:"SessionEnd",hook:true,blk:"清理",cats:["gate"],p:"治理留痕收尾。",d:"metrics 不进仓库。"},
+    {slot:"side",id:"merge-ci",name:"合并门禁 CI / pre-commit",hook:false,blk:"非 hook · 仓外",cls:"merge",cats:["merge"],p:"过 lint 才能进主干。",d:"确定性规则归 lint/CI。模型若敲 git commit，先走人审站（宿主 ask），不要 Stop deny。"}
+  ];
+
+  var filter=null;
+  var legend=document.getElementById("legend");
+  CATS.forEach(function(c){
+    var el=document.createElement("button");
+    el.className="lg";
+    el.style.setProperty("--c", c.c);
+    el.innerHTML="<i></i>"+c.name;
+    el.onclick=function(){
+      filter = filter===c.id ? null : c.id;
+      var b=legend.querySelectorAll(".lg");
+      for(var i=0;i<b.length;i++) b[i].classList.toggle("on", CATS[i].id===filter);
+      paint();
+    };
+    legend.appendChild(el);
+  });
+
+  var bySlot={};
+  NODES.forEach(function(n){
+    if(!bySlot[n.slot]) bySlot[n.slot]=[];
+    bySlot[n.slot].push(n);
+  });
+  Object.keys(bySlot).forEach(function(slot){
+    var host=document.querySelector('[data-slot="'+slot+'"]');
+    if(!host) return;
+    bySlot[slot].forEach(function(n){
+      var el=document.createElement("article");
+      el.className="node"+(n.cls?" "+n.cls:"")+(n.hook?"":" ghost");
+      el.dataset.id=n.id;
+      var dots=n.cats.map(function(id){
+        var c=CATS.filter(function(x){return x.id===id;})[0];
+        return '<span class="dot" style="background:'+c.c+'" title="'+c.name+'"></span>';
+      }).join("");
+      el.innerHTML='<div class="hn">'+n.name+'<span class="blk">'+(n.hook?"hook":"")+" "+n.blk+'</span></div><p>'+n.p+'</p><div class="dots">'+dots+"</div>";
+      el.onclick=function(){ show(n, el); };
+      host.appendChild(el);
+    });
+  });
+
+  var detail=document.getElementById("detail");
+  var current=null;
+  function show(n, el){
+    var all=document.querySelectorAll(".node");
+    for(var i=0;i<all.length;i++) all[i].classList.remove("on");
+    el.classList.add("on");
+    current=n;
+    var names=n.cats.map(function(id){ return CATS.filter(function(x){return x.id===id;})[0].name; }).join(" · ") || "本阶段不落 12 类资料";
+    detail.className="detail show";
+    detail.innerHTML="<b>"+n.name+"</b> · "+(n.hook?"生命周期 hook":"非 hook 控制站")+"<br>挂载："+names+"<br>"+(n.d||n.p);
+    detail.scrollIntoView({behavior:"smooth",block:"nearest"});
+  }
+  function paint(){
+    var all=document.querySelectorAll(".node");
+    for(var i=0;i<all.length;i++){
+      var id=all[i].dataset.id;
+      var n=NODES.filter(function(x){return x.id===id;})[0];
+      all[i].classList.toggle("dim", !!(filter && n.cats.indexOf(filter)<0));
+    }
+  }
+})();
+</script>
+</body>
+</html>

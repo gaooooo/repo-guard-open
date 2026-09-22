@@ -31,7 +31,10 @@ interface RedlinesFile {
   rules?: unknown;
   /** 禁止重构清单。AI 最爱重构"看起来脏"的历史代码，必须显式拦住 */
   no_refactor?: unknown;
-  /** Agent 必须停下来问人的场景。纯文本，注入 prompt 供 LLM 自觉 */
+  /**
+   * 旧模板把停止条件写在红线文件里。新写请放 facts.json 的 stopConditions。
+   * 本字段仍读取，注入时与 facts 合并。
+   */
   stop_conditions?: unknown;
 }
 
@@ -45,15 +48,13 @@ export function redlinesFile(repoDir: string): string {
  * ⚠️ **它不参与运行时加载。** `loadRedlines` 与 `hasRedlines` 只看项目层，
  * 这个函数只被 `redlines init` 用来做一次性拷贝。
  *
- * 为什么不做成两层合并（三条理由写在 templates/redlines.json 的 `_` 注释里）：
+ * 为什么不做成两层合并（三条理由写在 layers/redlines/redlines.json 的 `_` 注释里）：
  * 简短版是 —— 全局层一旦参与，没写过红线的仓库会突然多出一段 SessionStart 注入，
  * 而 `audit` 的「未配置」退出码也会从 2 变成 0。那违反「空配置零行为变化」。
  *
- * `__dirname` 在打包后的 CJS 产物里指向 `bin/`，所以往上一级找 `templates/`，
- * 与 `standardsTemplateDir()` / `gates/config.ts` 的 `templateDir()` 同构。
  */
 export function redlinesTemplateFile(): string {
-  return path.resolve(__dirname, '..', 'templates', 'redlines.json');
+  return path.resolve(__dirname, '..', 'layers', 'redlines', 'redlines.json');
 }
 
 export function hasRedlines(repoDir: string): boolean {

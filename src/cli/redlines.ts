@@ -4,7 +4,7 @@
  * ── 为什么是独立子命令，而不是并进 `repo-guard init --write` ──
  * `init --write` 的 stdout 被 5 条 parity 用例逐字节守着（每个 fixture 一条）。
  * 在那里多打一行「已写入 redlines.json」会让它们全红，而且**无法通过对齐修复**：
- * 基线产物在 `build/baseline/` 下，它解析出的 `templates/` 路径不存在，
+ * 基线产物在 `build/baseline/` 下，它解析出的 `layers/` 路径不存在，
  * 所以基线永远看不见模板、永远不会拷贝。两侧行为必然不同。
  *
  * 把它拆成独立命令之后，`init` 的输出一个字节都没变，而这条新命令没有任何
@@ -33,7 +33,7 @@ export function runRedlinesInit(repoDir: string, write: boolean): StandardsResul
     return {
       text:
         `${lines.join('\n')}\n\n找不到红线模板：${tpl}\n` +
-        '`bin/repo-guard` 与 `templates/` 必须在同一个插件目录下。\n',
+        '`bin/repo-guard` 与 layers/ 必须在同一个插件目录下。\n',
       exitCode: 2,
     };
   }
@@ -46,7 +46,7 @@ export function runRedlinesInit(repoDir: string, write: boolean): StandardsResul
     lines.push(
       '',
       '已存在，**不会覆盖**。',
-      '模板若有新增条目，对照 templates/redlines.json 自己补。',
+      '模板若有新增条目，对照 layers/redlines/redlines.json 自己补。',
       '',
       '改完跑 `repo-guard audit` —— 它验的是完整性：paths 写全了没、',
       'protects 的符号还在不在、evidence 的行号还准不准。',

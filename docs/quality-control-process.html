@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>repo-guard 质量过程控制全景</title>
+<style>
+:root{--bg:#07090d;--panel:#121922;--ink:#e8eef6;--muted:#8b9aab;--dim:#5c6d7e;--line:#243140;--line2:#33485c;--l0:#5eead4;--l1:#f87171;--l2:#7dd3fc;--l3:#fbbf24;--l4:#c4b5fd;--l5:#fb923c;--l6:#86efac;--re:#f9a8d4;--pull:#93c5fd;--ok:#4ade80;--off:#64748b;--host:#38bdf8;--mono:"IBM Plex Mono","SF Mono",ui-monospace,Menlo,monospace;--sans:"IBM Plex Sans","Noto Sans SC","PingFang SC","Hiragino Sans GB",sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+body{min-height:100vh;background-image:radial-gradient(1100px 480px at 8% -8%,rgba(94,234,212,.08),transparent 55%),radial-gradient(900px 420px at 92% 0,rgba(248,113,113,.07),transparent 50%)}
+.wrap{max-width:1280px;margin:0 auto;padding:28px 28px 72px}
+header.hero{display:grid;grid-template-columns:1fr auto;gap:22px;align-items:end;padding-bottom:20px;border-bottom:1px solid var(--line)}
+.kicker{font-family:var(--mono);font-size:12px;letter-spacing:.16em;color:var(--l0);text-transform:uppercase}
+h1{font-size:34px;line-height:1.15;margin:8px 0 10px;letter-spacing:-.02em}
+.lede{color:var(--muted);max-width:740px;font-size:15.5px;line-height:1.7}
+.lede b{color:var(--ink)}
+.meta{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+.chip{font-family:var(--mono);font-size:11px;padding:5px 9px;border:1px solid var(--line);background:var(--panel);border-radius:999px;color:var(--muted)}
+.chip i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
+.nav{position:sticky;top:0;z-index:20;display:flex;gap:6px;flex-wrap:wrap;padding:12px 0 14px;background:linear-gradient(180deg,rgba(7,9,13,.96),rgba(7,9,13,.86) 70%,transparent)}
+.nav button{appearance:none;cursor:pointer;background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font:500 12.5px var(--sans)}
+.nav button.active,.nav button:hover{color:var(--ink);border-color:var(--line2);background:#18222e}
+section{margin-top:34px}
+h2{font-size:20px;margin:0 0 6px}
+h3{font-size:15px;margin:0 0 8px}
+.sub{color:var(--muted);font-size:13.5px;line-height:1.65;margin:0 0 16px}
+.panel{background:linear-gradient(180deg,rgba(24,34,46,.92),rgba(18,25,34,.94));border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.rail{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;padding:16px}
+.node{cursor:pointer;padding:12px 10px 11px;border-radius:12px;border:1px solid var(--line);background:#10171f;min-height:122px;transition:transform .15s ease,border-color .15s ease}
+.node:hover,.node.on{transform:translateY(-2px);border-color:var(--accent,var(--l0));background:#15202b}
+.node .id{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--accent,var(--l0))}
+.node h4{margin:6px 0;font-size:14px}
+.node p{margin:0;color:var(--muted);font-size:12px;line-height:1.45}
+.tag{display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--dim)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.live{color:var(--ok)}.off{color:var(--off)}.host{color:var(--host)}
+.flow-caption{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:0 16px 14px;color:var(--dim);font-size:12px;font-family:var(--mono)}
+.detail{display:none;margin:0 16px 16px;padding:14px 16px;border:1px dashed var(--line2);border-radius:12px;background:rgba(8,12,18,.55)}
+.detail.show{display:block}
+.kv{display:grid;grid-template-columns:92px 1fr;gap:6px 12px;font-size:13px}
+.kv dt{color:var(--dim);font-family:var(--mono);font-size:11px;padding-top:2px}
+.kv dd{margin:0;color:var(--muted);line-height:1.55}
+.loop{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:16px}
+.step{padding:12px;border-radius:12px;border:1px solid var(--line);background:#10171f;min-height:132px}
+.step .n{font-family:var(--mono);font-size:11px;color:var(--l0)}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.grid2{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
+.mini{padding:14px}
+ul.tight{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.6}
+.swim{overflow-x:auto;border-top:1px solid var(--line)}
+table.matrix{width:100%;border-collapse:collapse;min-width:1020px;font-size:12.5px}
+table.matrix th,table.matrix td{border-bottom:1px solid var(--line);border-right:1px solid rgba(36,49,64,.7);padding:10px 9px;text-align:left;vertical-align:top}
+table.matrix th{background:#101820;color:var(--dim);font-weight:500;font-family:var(--mono);font-size:11px;letter-spacing:.06em}
+table.matrix td.lane{width:96px;color:var(--ink);font-weight:600;background:#101820;position:sticky;left:0}
+.cell{cursor:pointer;border-radius:8px;padding:7px 8px;background:#0f161e;border:1px solid transparent}
+.cell:hover,.cell.on{border-color:var(--line2);background:#182330}
+.cell b{display:block;font-size:12px;margin-bottom:2px}
+.cell span{color:var(--muted);font-size:11.5px;line-height:1.4;display:block}
+.empty{color:var(--dim);font-family:var(--mono);font-size:11px}
+.chain{padding:10px 18px 18px;display:flex;flex-direction:column}
+.cstep{display:grid;grid-template-columns:22px minmax(0,1fr);column-gap:14px;align-items:start;position:relative}
+.cstep:not(:last-child)::before{content:"";position:absolute;left:10px;top:28px;bottom:0;width:2px;background:linear-gradient(180deg,var(--accent,var(--line2)),var(--line));opacity:.75;pointer-events:none}
+.cstep .tick{grid-column:1;width:14px;height:14px;margin:14px 4px 0;border-radius:50%;border:2px solid var(--accent,var(--l1));background:#07090d;box-shadow:0 0 0 4px #121922;z-index:1}
+.cstep .cardx{grid-column:2;margin:0 0 12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#10171f}
+.cstep .cardx .who{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--accent,var(--l1))}
+.sev{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:16px}
+.sev .bar{padding:14px;border-radius:12px;border:1px solid var(--line)}
+.gates{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.gate{padding:16px}
+.gate header{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.pill{font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:999px;border:1px solid currentColor}
+table.plain{width:100%;border-collapse:collapse;font-size:13px}
+table.plain th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;padding:8px;border-bottom:1px solid var(--line)}
+table.plain td{padding:8px;border-bottom:1px solid var(--line);color:var(--muted);vertical-align:top}
+table.plain td:first-child{color:var(--ink);font-family:var(--mono);font-size:12px}
+.iron{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.note{font-size:12.5px;color:var(--dim);margin-top:10px;line-height:1.55}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--dim);font-size:12px;line-height:1.6}
+code{font-family:var(--mono);font-size:.92em;color:var(--l0)}
+.schematic{padding:18px 16px 6px}
+.schematic svg{width:100%;height:auto;display:block}
+@media (max-width:1100px){.rail,.loop,.grid3,.grid2,.gates,.iron,.sev{grid-template-columns:1fr 1fr}header.hero{grid-template-columns:1fr}.meta{justify-content:flex-start}}
+@media (max-width:720px){.rail,.loop,.grid3,.grid2,.gates,.iron,.sev{grid-template-columns:1fr}.wrap{padding:18px 14px 48px}h1{font-size:26px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <div>
+    <div class="kicker">repo-guard · quality control plane</div>
+    <h1>质量提升 / 控制过程全景</h1>
+    <p class="lede">核心判断：AI 写代码的质量问题，多数不是「模型不够聪明」，而是「<b>它不知道这一改会波及什么</b>」。影响面、红线意图、仓内既有写法，静态分析能算、模型算不出来。插件把这三类信息推进过程，并在关键事件上硬拦或提醒。</p>
+  </div>
+  <div class="meta">
+    <span class="chip"><i style="background:var(--ok)"></i>LIVE 已落地</span>
+    <span class="chip"><i style="background:var(--off)"></i>OFF 默认关</span>
+    <span class="chip"><i style="background:var(--host)"></i>HOST 交宿主</span>
+    <span class="chip"><i style="background:var(--l3)"></i>SOFT 只提醒</span>
+    <span class="chip">零服务端 · fail-open</span>
+  </div>
+</header>
+<nav class="nav" id="nav">
+  <button class="active" data-jump="panorama">1. 全景</button>
+  <button data-jump="why-seven">2. 门 × Hook</button>
+  <button data-jump="upgrade">3. 接入升档</button>
+  <button data-jump="session">4. 会话时序</button>
+  <button data-jump="prewrite">5. 写前判定链</button>
+  <button data-jump="gates">6. 各门控制点</button>
+  <button data-jump="standards">7. 规范强度</button>
+  <button data-jump="delegate">8. 外委与铁律</button>
+</nav>
+<section id="panorama">
+  <h2>一、控制过程全景图</h2>
+  <p class="sub">七道门就是 L0–L6，按「一次任务要回答的质量控制问题」切，不是按 hook 事件切。点门看控制点。图谱工具是能力（拉），不是第八道门。</p>
+  <div class="panel">
+    <div class="schematic">
+      <svg viewBox="0 0 1180 178" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="质量过程控制全景">
+        <rect x="8" y="10" width="1164" height="44" rx="10" fill="#10171f" stroke="#243140"/>
+        <text x="24" y="29" fill="#5eead4" font-size="11" font-family="ui-monospace,monospace">CONFIG</text>
+        <text x="24" y="46" fill="#c9d6e3" font-size="13" font-family="PingFang SC,sans-serif">identity / capability / constraint / process  +  repo-facts  +  redlines  +  standards</text>
+        <path d="M70 54 v18" stroke="#33485c" stroke-width="2"/>
+        <rect x="8" y="78" width="1164" height="86" rx="10" fill="#10171f" stroke="#243140"/>
+        <text x="24" y="98" fill="#5eead4" font-size="11" font-family="ui-monospace,monospace">SESSION</text>
+        <text x="24" y="122" fill="#e8eef6" font-size="14" font-family="PingFang SC,sans-serif">L0 注入  →  L1 准入  →  L2 执行  →  L3 循环  →  L4 信号  →  L5 交付  →  L6 留痕</text>
+        <text x="24" y="146" fill="#86efac" font-size="13" font-family="PingFang SC,sans-serif">governance 报表反哺升档：remind 跑一段时间 → 看误伤 → 再开 ask/block</text>
+      </svg>
+    </div>
+    <div class="rail" id="rail"></div>
+    <div class="flow-caption"><span>空配置 = 零行为变化 · 项目层不存在 = 规范不进运行时</span><span>推 / 按任务 / 拉 / 硬 / 软</span></div>
+    <div class="detail show" id="rail-detail"></div>
+  </div>
+</section>
+
+<section id="why-seven">
+  <h2>二、七道门怎么分，和 hook 什么关系</h2>
+  <p class="sub">Hook 是 CodeBuddy 宿主提供的生命周期插槽（SessionStart、PreToolUse、Stop…）。门是插件自己的控制语义：每一道回答一个问题。映射是多对多——一道门可以挂多个 hook，一个 hook 也可以同时服务几道门。</p>
+  <div class="panel" style="padding:8px 8px 0">
+    <table class="plain">
+      <thead>
+        <tr><th>门</th><th>回答的问题</th><th>主要 hook</th><th>插件动作</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>L0 注入面</td><td>开干前，模型知不知道本仓约束？</td><td>SessionStart · UserPromptSubmit · PostCompact</td><td>additionalContext 推注入。不拦。</td></tr>
+        <tr><td>L1 准入门</td><td>这次写入允不允许开始？</td><td>PreToolUse（写工具 / Bash）</td><td>公共层未查 impact → deny。红线/禁改/范围默认关。</td></tr>
+        <tr><td>L2 执行门</td><td>这条命令能不能真正跑？</td><td>宿主 permissions / sandbox（不是插件 hook）</td><td>插件永久不做，避免两套规则打架。</td></tr>
+        <tr><td>L3 循环门</td><td>是不是卡住空转？</td><td>PostToolUse / PostToolUseFailure 计数，PreToolUse 短路</td><td>重复 3 / 连败 3 可 deny。默认关，计数始终记。</td></tr>
+        <tr><td>L4 诚实信号</td><td>这一轮实际怎么结束的？</td><td>Stop · SessionEnd</td><td>只观测。看不到宿主 finalReason，只能近似。</td></tr>
+        <tr><td>L5 交付门</td><td>交付是否可接受？</td><td>Stop</td><td>查本会话有没有 lint/test/build 证据。默认只提醒。</td></tr>
+        <tr><td>L6 治理留痕</td><td>这些门有没有在做有用功？</td><td>所有已实现 hook 写 metrics，SessionEnd 收尾</td><td>写入 HOME/metrics.ndjson，governance 出报表。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2" style="margin-top:12px">
+    <div class="panel mini">
+      <h3>切分依据：问题，不是事件</h3>
+      <ul class="tight">
+        <li>L0 知道约束 → L1 这次能不能动 → L2 命令能不能跑 → L3 有没有空转 → L4 怎么收场 → L5 交得出去吗 → L6 门禁有没有用。</li>
+        <li>所以是 7 道，编号 L0–L6。L0 从 0 起，因为它发生在任何工具调用之前。</li>
+        <li>UserPromptSubmit 属于 L0（按任务再推一截），不是单独一道门。</li>
+      </ul>
+    </div>
+    <div class="panel mini">
+      <h3>一个 hook 服务多道门的例子</h3>
+      <ul class="tight">
+        <li><code>PreToolUse</code>：先走 L3 循环短路，再走 L1 红线/范围/公共层。</li>
+        <li><code>PostToolUse</code>：L3 更新计数 + 超长提醒 + L6 埋点。</li>
+        <li><code>Stop</code>：L5 交付提醒 + L3 迭代摘要 + L4 近似信号。</li>
+        <li>Hook 是管子，门是管子里流过的判定。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="upgrade">
+  <h2>三、质量提升闭环：先体检，再注入，最后才硬拦</h2>
+  <p class="sub">装完就开始拦人的护栏，人的第一反应是卸载。升档顺序写死在 docs/STANDARDS.md §8。</p>
+  <div class="panel"><div class="loop">
+    <div class="step"><div class="n">1. 体检</div><h3>init / scan</h3><p class="sub" style="margin:0">技术栈、超长文件、循环依赖、推测公共层。默认一个字节不写。</p></div>
+    <div class="step"><div class="n">2. 人确认</div><h3>init --write</h3><p class="sub" style="margin:0">生成 repo-facts。公共层是推测，猜错要么漏拦要么天天误伤。</p></div>
+    <div class="step"><div class="n">3. 意图进仓</div><h3>redlines + audit</h3><p class="sub" style="margin:0">人写意图，机器验完整性：守空气 / paths 后门 / evidence 失准。</p></div>
+    <div class="step"><div class="n">4. 只提醒</div><h3>standards init</h3><p class="sub" style="margin:0">五端规范铺进项目层。maxSeverity 默认 remind，铺完不会有新拦截。</p></div>
+    <div class="step"><div class="n">5. 看数据</div><h3>governance</h3><p class="sub" style="margin:0">这些门在做有用功还是在骚扰人。没有数据不要开硬拦。</p></div>
+    <div class="step"><div class="n">6. 逐条升档</div><h3>ask → block</h3><p class="sub" style="margin:0">每开一条先看误伤。block 还要过准入三条件，否则自动降级。</p></div>
+  </div></div>
+  <div class="grid3" style="margin-top:12px">
+    <div class="panel mini"><h3>两层配置，两种生效</h3><ul class="tight"><li><b>运行时合并</b>：standards/ 全局层直接被读，项目层按 id 字段级覆盖。</li><li><b>一次性拷贝</b>：redlines / guard / repo-facts 靠 init 拷到项目层。</li><li>升级插件不会把新红线偷偷塞进已有仓库。</li></ul></div>
+    <div class="panel mini"><h3>四层配置面</h3><ul class="tight"><li><b>身份</b> 团队是谁：章程、岗位 → 推</li><li><b>能力</b> 加一项更能干：项目知识、任务路由、图谱 → 推 / 按任务 / 拉</li><li><b>约束</b> 加一项更受限：禁忌、红线、禁改、范围 → 推 / 硬</li><li><b>流程</b> 活怎么进来怎么收：图谱强制、循环、交付、复述 → 软 / 硬</li></ul></div>
+    <div class="panel mini"><h3>验收闸门</h3><ul class="tight"><li><code>doctor</code>：JSON、僵尸条目、注入配额、静默降级</li><li><code>verify-hooks</code>：59 条，拦得对且不误伤</li><li><code>audit</code>：红线腐烂检测</li><li>脚本测代码，真机测宿主怎么用它。</li></ul></div>
+  </div>
+</section>
+<section id="session">
+  <h2>四、单次会话：泳道 × 时间轴</h2>
+  <p class="sub">横轴里只有带 hook 名的列才是生命周期事件。「宿主执行」那一列不是 hook：它是 L2，发生在 PreToolUse 放行之后、工具真正跑起来之时，归宿主 permissions / sandbox。</p>
+  <div class="panel swim">
+    <table class="matrix" id="matrix"><thead><tr><th></th><th>SessionStart</th><th>UserPromptSubmit</th><th>PreToolUse</th><th>宿主执行 · 非 hook</th><th>PostToolUse</th><th>Stop</th><th>End / Compact</th></tr></thead><tbody></tbody></table>
+    <div class="detail" id="matrix-detail"></div>
+  </div>
+</section>
+<section id="prewrite">
+  <h2>五、写前判定链：按代价排序，不是按重要性</h2>
+  <p class="sub">pre-write 只允许输出 deny 或什么都不输出。循环门放第一位。公共层守卫必须排在规范 require_tool 之前。</p>
+  <div class="panel"><div class="chain" id="chain"></div></div>
+</section>
+<section id="gates">
+  <h2>六、L0–L6 各门控制点</h2>
+  <p class="sub">每道门写清拦什么、不拦什么、默认值、以及为什么。配置骨架在 templates/guard/，除 L0 / L6 外全部默认关。</p>
+  <div class="gates" id="gate-cards"></div>
+</section>
+<section id="standards">
+  <h2>七、研发规范：强度 × 时机 × 落点</h2>
+  <p class="sub">红线只有一种强度（命中就拦）。规范多一个问题：<b>这条能不能拦</b>。block 级编译成 PolicyRule，交给同一套红线引擎。</p>
+  <div class="panel"><div class="sev">
+    <div class="bar"><h4 style="color:var(--l0)">inject</h4><p class="sub" style="margin:0">只注入上下文，任何判定都不做。最安全，适合第一周。</p></div>
+    <div class="bar"><h4 style="color:var(--l3)">remind</h4><p class="sub" style="margin:0">写完后 PostToolUse 提醒，不阻断。出厂 maxSeverity。</p></div>
+    <div class="bar"><h4 style="color:var(--l5)">ask</h4><p class="sub" style="margin:0">PreToolUse 转人工确认。仍可被 maxSeverity 压回 remind。</p></div>
+    <div class="bar"><h4 style="color:var(--l1)">block</h4><p class="sub" style="margin:0">PreToolUse deny。必须过准入三条件，否则自动降为 remind。</p></div>
+  </div></div>
+  <div class="grid2" style="margin-top:12px">
+    <div class="panel mini"><h3>block 准入三条件</h3><ul class="tight"><li>判据足够硬：仅 protect_symbol / path_only / require_tool</li><li>content_regex 永不 block</li><li>confirmed: true，否则自动降级</li><li>符号类规则 symbols 非空</li><li>还要受 maxSeverity 天花板压制</li></ul></div>
+    <div class="panel mini"><h3>时机 timing</h3><ul class="tight"><li>session_start / post_compact → 推注入</li><li>prompt_submit → 按任务注入</li><li>pre_write → 硬拦 / ask</li><li>pre_bash → 旁路观测</li><li>post_write → remind 扫描</li><li>stop → 交付证据</li></ul></div>
+  </div>
+  <div class="panel" style="margin-top:12px;padding:8px 8px 0">
+    <table class="plain">
+      <thead><tr><th>端</th><th>代表控制点</th><th>默认强度</th><th>注意</th></tr></thead>
+      <tbody>
+        <tr><td>L0 契约</td><td>只增可选、字段冻结、契约 diff</td><td>inject / ask</td><td>跨仓 diff 归 CI</td></tr>
+        <tr><td>Common</td><td>公共层先查影响面、行数、密钥弱提醒</td><td>remind</td><td>循环依赖 / 密钥真拦归 lint·CI</td></tr>
+        <tr><td>Frontend</td><td>组件库、色值、i18n、禁 any</td><td>remind</td><td>前端仓必须关掉 DB/MQ 端</td></tr>
+        <tr><td>Backend</td><td>接口契约、分层、配置进公共层</td><td>remind / block 模板默认关</td><td>超时幂等只 inject</td></tr>
+        <tr><td>Database</td><td>三处联动、migration、字段红线</td><td>remind / block</td><td>影响面 0 ≠ 可以删</td></tr>
+        <tr><td>MQ</td><td>只增可选、两端同步发布</td><td>inject / ask</td><td>对端在另一仓，硬落点只能 CI</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<section id="delegate">
+  <h2>八、拦不住的明确外委，以及四条铁律</h2>
+  <p class="sub">不假装能拦是底线。确定性规则归 lint，阻断合并归 CI，安全边界归宿主 permissions，过程中的「你现在要动的东西很贵」归插件。</p>
+  <div class="panel" style="padding:8px 8px 0;margin-bottom:12px">
+    <table class="plain">
+      <thead><tr><th>规范 / 行为</th><th>为什么插件拦不住</th><th>交给谁</th></tr></thead>
+      <tbody>
+        <tr><td>循环依赖</td><td>全量图 + 增量判定超出 hook 时间预算</td><td>lint import/no-cycle</td></tr>
+        <tr><td>行数硬拦</td><td>存量超长文件遍地，硬拦等于没法干活</td><td>max-lines lint（新文件严）</td></tr>
+        <tr><td>i18n / 禁 any</td><td>需要 AST；正则会把注释和测试算进去</td><td>eslint / tsc --strict + CI</td></tr>
+        <tr><td>密钥</td><td>弱正则只能提醒；真判定要熵检测 + 历史扫描</td><td>CI secret scan + pre-commit</td></tr>
+        <tr><td>碰生产 / git commit</td><td>人随时会敲；Stop 硬拦会妨碍人</td><td>宿主 permissions.ask</td></tr>
+        <tr><td>契约 diff / 覆盖率 / CODEOWNERS</td><td>跨仓或平台能力</td><td>CI / 代码平台</td></tr>
+        <tr><td>shell 写公共层</td><td>命令里可能同时有读写，路径可能是变量</td><td>插件只提醒计数，不 deny</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="iron">
+    <div class="panel mini"><h3>1. pre-write 只 deny 或沉默</h3><p class="sub" style="margin:0">往写前挂提醒，会让每次正常写文件都产生干预，噪音淹没真拦截。</p></div>
+    <div class="panel mini"><h3>2. hook 只读缓存，永不建图</h3><p class="sub" style="margin:0">写前 15 秒、写后 5 秒。万文件仓建图要几十秒。缓存 miss 即放行。</p></div>
+    <div class="panel mini"><h3>3. 任何异常都必须 fail-open</h3><p class="sub" style="margin:0">hook 抛错在 PreToolUse 上等于阻断工具。为自己的 bug 挡人，比漏拦一次坏得多。</p></div>
+    <div class="panel mini"><h3>4. 没有项目层 = 零行为变化</h3><p class="sub" style="margin:0">全局层跟着插件走。没铺 .codebuddy/standards/ 的仓库，规范不进运行时。</p></div>
+  </div>
+  <p class="note">配套铁律：未配置必须明说守卫未生效；新建公共层文件放行；查过 A 不放行 B；影响面为 0 不等于可以删；Stop 若 continue:false，同一 reason 每会话最多一次。</p>
+</section>
+<footer>依据 docs/DESIGN.md、docs/CONTROL-POINTS.md、docs/STANDARDS.md、src/hooks/index.ts、src/gates/*、templates/guard/。L2 执行门交宿主，永久不做。</footer>
+</div>
+<script>
+(function(){
+  var DETAILS={
+    l0:{title:"L0 注入面",kv:[["落点","SessionStart / PostCompact / UserPromptSubmit → additionalContext"],["已落地","公共层清单、行数上限、盲区提醒、红线摘要、规范 session_start 段"],["待填","章程 / 项目知识 / 禁忌 / 任务路由（配置默认空）"],["预算","每段 1500 token，超限按行截断并显式标注「已截断」"],["强度","只注入，绝不拦截提问。未配置时明说守卫未生效"],["源码","src/gates/inject.ts · src/hooks/index.ts"]]},
+    pull:{title:"能力层 · 拉",kv:[["工具","impact / hot / scan / check / trace / similar / lib_search / audit / contracts"],["硬耦合","改公共层已有文件前必须本轮查过该文件的 impact"],["盲区","动态 import、样式引用、SQL、离线任务、其它服务不在图里"],["空图","置信度不够时明确报暂不支持，绝不给空图"],["源码","src/engine/graph-builder.ts · src/mcp/server.ts"]]},
+    l1:{title:"L1 准入门",kv:[["公共层守卫","已有文件属于 publicLayer 且本轮未查 impact → deny。新建放行。不受 L1 总闸控制"],["红线三层","结构化删除 → 意图正则（标识符+破坏性动作双条件）→ paths 收窄"],["禁改","no_refactor 路径命中即禁"],["范围门","allowlist + maxFiles。maxFiles 是失控探测器，建议 10-20"],["源码","src/runtime/guard.ts · src/gates/admission.ts"]]},
+    l2:{title:"L2 执行门 · 交宿主",kv:[["为什么不做","宿主已有 6 种权限模式 + 分类器 + sandbox"],["插件可做的","覆盖不到的危险命令给 ask，不自己 deny"],["开关","L2_execution.enabled 永久 false"]]},
+    l3:{title:"L3 循环门",kv:[["重复调用","同 (工具名, 入参指纹) 连续 3 次 → deny。指纹不含内容"],["连续失败","阈值 3；同文件写失败阈值 2"],["迭代预算","只能观测，插件没有 ReAct 循环所有权"],["源码","src/gates/loop.ts"]]},
+    l4:{title:"L4 诚实信号",kv:[["落点","Stop / SessionEnd"],["能算的","本会话工具调用数、失败数、有没有写、有没有跑过校验"],["不能算的","宿主 finalReason、子 agent 抛异常、thinking_exhausted"],["标记","approximate:true，不要当成四态收场"],["源码","src/gates/delivery.ts recordFinalSignal"]]},
+    l5:{title:"L5 交付门",kv:[["工程校验","Stop 时看本会话是否有 lint/test/build 证据。默认 warn"],["为何不硬拦","git commit 是人随时会敲的动作"],["死循环","continue:false 时同一 reason 每会话最多 1 次"],["源码","src/gates/delivery.ts"]]},
+    l6:{title:"L6 治理留痕",kv:[["落盘","$HOME/.repo-guard/metrics.ndjson，不进被守护仓库"],["命令","repo-guard governance"],["状态","$HOME/.repo-guard/state/<sid>.json 按文件记查过哪些"],["源码","src/runtime/metrics.ts · src/cli/governance.ts"]]}
+  };
+  function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+  function kvHtml(title,kv){return "<h3>"+esc(title)+"</h3><dl class=\"kv\">"+kv.map(function(p){return "<dt>"+esc(p[0])+"</dt><dd>"+esc(p[1])+"</dd>";}).join("")+"</dl>";}
+  var NODES=[
+    {key:"l0",accent:"var(--l0)",id:"L0 · 推",title:"注入面",p:"开干前把公共层、红线摘要、规范推进上下文。压缩后重注。",tag:"live",tagText:"LIVE · 只注入不拦"},
+    {key:"l1",accent:"var(--l1)",id:"L1 · 硬",title:"准入门",p:"写前：红线 / 禁改 / 范围 / 图谱强制 / 公共层守卫。",tag:"live",tagText:"公共层 LIVE · 其余默认关"},
+    {key:"l2",accent:"var(--l2)",id:"L2 · 宿主",title:"执行门",p:"危险命令、沙箱、权限模式。插件不重复实现。",tag:"host",tagText:"HOST · 开关永久 false"},
+    {key:"l3",accent:"var(--l3)",id:"L3 · 硬",title:"循环门",p:"重复调用 / 连续失败 / 同文件写失败。迭代预算只观测。",tag:"off",tagText:"OFF · 计数器始终记"},
+    {key:"l4",accent:"var(--l4)",id:"L4 · 观测",title:"诚实信号",p:"这一轮实际怎么结束：只能近似，看不到宿主 finalReason。",tag:"off",tagText:"SOFT · 纯观测"},
+    {key:"l5",accent:"var(--l5)",id:"L5 · 软",title:"交付门",p:"Stop 时查 lint/test/build 证据。默认只提醒，不拦 commit。",tag:"off",tagText:"OFF · 误伤优先于强度"},
+    {key:"l6",accent:"var(--l6)",id:"L6 · 留痕",title:"治理留痕",p:"所有 hook 写 metrics。governance 看门禁是有用功还是骚扰。",tag:"live",tagText:"LIVE · 不碰仓库"}
+  ];
+  var rail=document.getElementById("rail");
+  NODES.forEach(function(n,i){
+    var el=document.createElement("article");
+    el.className="node"+(i===0?" on":"");
+    el.dataset.key=n.key;
+    el.style.setProperty("--accent",n.accent);
+    el.innerHTML="<div class=\"id\">"+esc(n.id)+"</div><h4>"+esc(n.title)+"</h4><p>"+esc(n.p)+"</p><div class=\"tag "+n.tag+"\"><span class=\"dot\"></span>"+esc(n.tagText)+"</div>";
+    el.addEventListener("click",function(){showRail(n.key);});
+    rail.appendChild(el);
+  });
+  var railDetail=document.getElementById("rail-detail");
+  function showRail(key){
+    var nodes=rail.querySelectorAll(".node");
+    for(var i=0;i<nodes.length;i++) nodes[i].classList.toggle("on",nodes[i].dataset.key===key);
+    railDetail.className="detail show";
+    railDetail.innerHTML=kvHtml(DETAILS[key].title,DETAILS[key].kv);
+  }
+  showRail("l0");
+  var LANES=[
+    {name:"注入 · 推",cells:[{t:"公共层 + 规范",d:"未配置则明说未生效。预算 1500 token。",k:"l0"},{t:"按任务必读",d:"关键词匹配 task-routes。这是 L0，不是单独一道门。",k:"l0"},{empty:true},{empty:true},{empty:true},{t:"交付/迭代摘要",d:"默认只 extra context，不续跑。",k:"l5"},{t:"PostCompact 重注",d:"压缩会冲掉 L0，不补回去守卫会显得随机。",k:"l0"}]},
+    {name:"硬拦 · deny",cells:[{empty:true},{t:"禁止拦截提问",d:"UserPromptSubmit 绝不能 continue:false。",k:"l0"},{t:"六步判定链",d:"L3 → 红线/禁改 → 范围 → 图谱强制 → 公共层 → require_tool",k:"l1"},{t:"宿主 permissions",d:"sandbox / allow / ask / deny。插件不重复实现。",k:"l2"},{empty:true},{t:"block 模式极少",d:"mode=block 才 continue:false，且去重。",k:"l5"},{empty:true}]},
+    {name:"软提醒",cells:[{t:"守卫未生效声明",d:"沉默会让人以为装着就有保护。",k:"l0"},{empty:true},{t:"shell 旁路",d:"sed -i / 重定向写公共层 → allow + note。",k:"l1"},{empty:true},{t:"超长 + 规范命中",d:"点明按本仓已有拆法拆。",k:"l5"},{t:"缺校验证据",d:"提醒本会话没跑 lint/test/build。",k:"l5"},{empty:true}]},
+    {name:"拉 · 工具",cells:[{t:"MCP 已挂",d:"9 个工具在工具面。能力，不是门。",k:"pull"},{t:"skills 渐进披露",d:"只预装 name+description。",k:"pull"},{t:"查过才放行",d:"按文件记。查过 A 不放行 B。",k:"l1"},{empty:true},{t:"记 queried",d:"成功查询后写入 state/<sid>.json",k:"l1"},{empty:true},{empty:true}]},
+    {name:"留痕",cells:[{t:"session_start",d:"HOME/metrics.ndjson",k:"l6"},{t:"task route 命中",d:"按任务类型归类。",k:"l6"},{t:"deny / allow_after_query",d:"判断这道门有没有在做有用功。",k:"l6"},{t:"权限框（占位）",d:"PermissionRequest 钩子留空。",k:"l2"},{t:"loop 计数 / 超长",d:"关着也记。",k:"l3"},{t:"L4 近似信号",d:"approximate:true。",k:"l4"},{t:"session_end + 清状态",d:"不碰用户仓库。",k:"l6"}]}
+  ];
+  var tb=document.querySelector("#matrix tbody");
+  LANES.forEach(function(lane,li){
+    var tr=document.createElement("tr");
+    var th=document.createElement("td"); th.className="lane"; th.textContent=lane.name; tr.appendChild(th);
+    lane.cells.forEach(function(c,ci){
+      var td=document.createElement("td");
+      td.innerHTML=c.empty?"<span class=\"empty\">·</span>":"<div class=\"cell\" data-l=\""+li+"\" data-c=\""+ci+"\"><b>"+esc(c.t)+"</b><span>"+esc(c.d)+"</span></div>";
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  var md=document.getElementById("matrix-detail");
+  tb.addEventListener("click",function(e){
+    var cell=e.target.closest(".cell"); if(!cell) return;
+    var all=tb.querySelectorAll(".cell"); for(var i=0;i<all.length;i++) all[i].classList.remove("on");
+    cell.classList.add("on");
+    var c=LANES[+cell.dataset.l].cells[+cell.dataset.c];
+    md.className="detail show";
+    md.innerHTML=kvHtml(LANES[+cell.dataset.l].name+" · "+c.t, DETAILS[c.k].kv);
+  });
+  var CHAIN=[
+    {who:"1. L3 循环门",color:"var(--l3)",why:"最便宜，只读计数器。拦的是「别再试了」。",act:"重复 3 / 连败 3 / 同文件写失败 2 → deny。默认关，但计数始终发生。"},
+    {who:"2. 红线 / 禁改 / STD-block",color:"var(--l1)",why:"要读磁盘算真 diff。Edit 会把替换应用到 before 得到精确 after。",act:"结构化删除命中即 deny。有真 diff 时忽略意图正则。"},
+    {who:"3. 范围门",color:"var(--l1)",why:"allowlist 漏写一个目录就会让 AI 什么都干不了，所以默认关。",act:"路径不在允许范围，或不同文件数撞 maxFiles → deny。"},
+    {who:"4. 图谱强制（新建）",color:"var(--l1)",why:"只管新建文件。改已有公共层由下一步核心守卫负责。",act:"similar / hot / libSearch 默认关。"},
+    {who:"5. 公共层守卫 · 核心功能",color:"var(--l0)",why:"不受 L1 总闸控制。拒绝文案给出 MCP / 斜杠命令 / CLI 三种调法。",act:"已有公共层文件且本轮未查该文件 impact → deny。新建放行。查过 A 不放行 B。"},
+    {who:"6. 规范 require_tool",color:"var(--l1)",why:"排在核心守卫之后，只补核心覆盖不到的场景。",act:"block 级规范要求 impact/similar/hot/lib_search。"},
+    {who:"放行",color:"var(--ok)",why:"到这里才记「改过这个文件」，作为范围门预算的分母。",act:"noteTouched。pre-write 全程无 additionalContext。"}
+  ];
+  var chainEl=document.getElementById("chain");
+  CHAIN.forEach(function(c){
+    var step=document.createElement("div");
+    step.className="cstep";
+    step.style.setProperty("--accent", c.color);
+    step.innerHTML="<div class=\"tick\"></div><div class=\"cardx\"><div class=\"who\">"+esc(c.who)+"</div><h3 style=\"margin:4px 0 6px\">"+esc(c.why)+"</h3><p class=\"sub\" style=\"margin:0\">"+esc(c.act)+"</p></div>";
+    chainEl.appendChild(step);
+  });
+  var GATES=[
+    {id:"L0",color:"var(--l0)",status:"LIVE",title:"注入面",items:["推：公共层目录、行数上限、盲区、红线摘要、规范正文","按任务：只注入「去读这些文件」，不烤内容","PostCompact 必须重注","插件只能追加 additionalContext，不能重排宿主 prompt"]},
+    {id:"L1",color:"var(--l1)",status:"LIVE / OFF",title:"准入门",items:["公共层写前守卫已在跑，是插件存在的理由","红线：人写意图进 git；audit 验完整性","意图正则必须双条件","新建公共层文件放行"]},
+    {id:"L2",color:"var(--l2)",status:"HOST",title:"执行门",items:["危险命令、超时、沙箱全部归宿主","插件只给建议 permissions","重复实现会和 autoMode 打架"]},
+    {id:"L3",color:"var(--l3)",status:"OFF",title:"循环门",items:["捕捉失控而不是错误","指纹不含内容，否则改一个字就重置","maxIterations 只观测"]},
+    {id:"L4",color:"var(--l4)",status:"SOFT",title:"诚实信号",items:["纯观测，看不到 finalReason","埋点带 approximate:true","StopFailure / SubagentStop 目前留空"]},
+    {id:"L5",color:"var(--l5)",status:"OFF",title:"交付门",items:["这边 commit 是人的动作，默认不硬拦","误伤优先于治理强度","真正要卡的是开 MR"]},
+    {id:"L6",color:"var(--l6)",status:"LIVE",title:"治理留痕",items:["所有 hook 追加 metrics.ndjson","governance 看有用功还是骚扰","升档的唯一依据"]},
+  ];
+  var gc=document.getElementById("gate-cards");
+  GATES.forEach(function(g){
+    var art=document.createElement("article");
+    art.className="panel gate";
+    art.innerHTML="<header><h3 style=\"color:"+g.color+"\">"+esc(g.id+" · "+g.title)+"</h3><span class=\"pill\" style=\"color:"+g.color+"\">"+esc(g.status)+"</span></header><ul class=\"tight\">"+g.items.map(function(i){return "<li>"+esc(i)+"</li>";}).join("")+"</ul>";
+    gc.appendChild(art);
+  });
+  document.getElementById("nav").addEventListener("click",function(e){
+    var btn=e.target.closest("button"); if(!btn) return;
+    var buttons=e.currentTarget.querySelectorAll("button");
+    for(var i=0;i<buttons.length;i++) buttons[i].classList.remove("active");
+    btn.classList.add("active");
+    document.getElementById(btn.dataset.jump).scrollIntoView({behavior:"smooth",block:"start"});
+  });
+})();
+</script>
+</body>
+</html>

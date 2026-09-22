@@ -71,6 +71,7 @@ w('.codebuddy/redlines.json', JSON.stringify({
     { id: 'RL-002', paths: ['src/utils/chain.ts'], protects: ['CHAIN_STATUS'],
       rule: '上链状态常量不能删', reason: '下游对账系统按它判定', confirmed: true },
   ],
+  stop_conditions: ['要改数据库 schema 时停下来问'],
 }, null, 2));
 
 // ── 第二个仓库：只给多仓隔离用例（G3）用 ──
@@ -209,18 +210,18 @@ add('E2', '缺 tool_input 不崩', 'allow', hook('pre-write', { session_id: S })
 
 phase = 'B';
 
-/** 铺一份 guard 配置。只写要用到的那几个文件，其余走默认（关） */
+/** 铺一份过程门禁 + 工程事实。测试仍用旧相对路径 patch，这里摊成两个薄文件。 */
 function writeGuard(patch) {
   const files = {
     'guard.json': {
       version: 1,
       gates: {
-        L0_inject: { enabled: true },
-        L1_admission: { enabled: true },
-        L3_loop: { enabled: true },
-        L4_signals: { enabled: true },
-        L5_delivery: { enabled: true },
-        L6_governance: { enabled: true },
+        inject: { enabled: true },
+        admission: { enabled: true },
+        loop: { enabled: true },
+        signals: { enabled: true },
+        delivery: { enabled: true },
+        governance: { enabled: true },
       },
     },
     'identity/charter.json': {
@@ -242,6 +243,7 @@ function writeGuard(patch) {
       },
     },
     'constraint/taboos.json': { items: ['不要为了让测试过而改断言'] },
+    'constraint/stop-conditions.json': { items: ['发现需求和实现矛盾时停下来，不要自己选一个'] },
     'constraint/no-refactor.json': {
       entries: [{ path: 'src/legacy/**', reason: '历史 hack，没测试', confirmed: true }],
     },
@@ -264,12 +266,40 @@ function writeGuard(patch) {
       deliveryBudget: { enabled: false, maxDeliveryFiles: null },
       evidencePatterns: [],
     },
-    'process/restate.json': { enabled: false },
+    'process/review.json': { enabled: false, minRiskLevel: 'medium', blockOnRequestChanges: false, agent: '' },
     ...patch,
   };
-  for (const [rel, body] of Object.entries(files)) {
-    w(`.codebuddy/guard/${rel}`, JSON.stringify(body, null, 2));
-  }
+  const g = files['guard.json'].gates;
+  const charter = files['identity/charter.json'];
+  const pk = files['capability/project-knowledge.json'];
+  const tr = files['capability/task-routes.json'];
+  const ge = files['process/graph-enforce.json'];
+  const dl = files['process/delivery.json'];
+  const facts = {
+    mission: charter.mission ?? '',
+    facts: charter.facts ?? [],
+    discipline: charter.discipline ?? [],
+    knowledge: pk.items ?? [],
+    taboos: files['constraint/taboos.json'].items ?? [],
+    stopConditions: files['constraint/stop-conditions.json']?.items ?? [],
+    taskRoutes: tr.routes ?? {},
+  };
+  const pg = {
+    inject: g.inject?.enabled !== false,
+    admission: g.admission?.enabled !== false,
+    loop: files['process/loop.json'],
+    signals: g.signals?.enabled === true,
+    delivery: dl,
+    governance: g.governance?.enabled !== false,
+    noRefactor: files['constraint/no-refactor.json'].entries ?? [],
+    scope: files['constraint/scope-gate.json'],
+    newPageSimilar: ge.newPageSimilar,
+    newComponentHot: ge.newComponentHot,
+    newComponentLibSearch: ge.newComponentLibSearch,
+    review: files['process/review.json'],
+  };
+  w('.codebuddy/facts.json', JSON.stringify(facts, null, 2));
+  w('.codebuddy/process-gates.json', JSON.stringify(pg, null, 2));
 }
 
 writeGuard({});
@@ -285,6 +315,11 @@ add('L0-4', '注入里含禁忌', 'yes',
   { verdict: l0.reason.includes('不要为了让测试过而改断言') ? 'yes' : 'no', reason: l0.reason });
 add('L0-5', '注入里含红线摘要', 'yes',
   { verdict: l0.reason.includes('RL-001') ? 'yes' : 'no', reason: l0.reason });
+
+add('L0-5b', '注入里含 facts.json 停止条件', 'yes',
+  { verdict: l0.reason.includes('发现需求和实现矛盾时停下来') ? 'yes' : 'no', reason: l0.reason });
+add('L0-5c', '注入里含 redlines.json 停止条件（旧字段不能丢）', 'yes',
+  { verdict: l0.reason.includes('要改数据库 schema 时停下来问') ? 'yes' : 'no', reason: l0.reason });
 
 add('L0-6', '压缩后重注入', 'context', hook('post-compact', { session_id: 'l0' }));
 
@@ -323,6 +358,23 @@ add('L1-3', 'Write 全量覆盖丢掉受保护标识符 → 拦', 'deny',
     session_id: 'l1c',
     tool_input: { file_path: 'src/utils/chain.ts', content: 'export const other = 1;\n' },
   }));
+
+// ── 人审：默认关时红线仍 deny；打开后结构化删除走 ask ──
+w('src/utils/chain.ts', 'export const CHAIN_STATUS = 1;\nexport const useChain = () => CHAIN_STATUS;\n');
+w('.codebuddy/human-review.json', JSON.stringify({ enabled: true, onRedline: 'ask' }));
+add('HR-1', '人审打开时红线结构化删除 → ask', 'ask',
+  hook('pre-write', {
+    session_id: 'hr1',
+    tool_input: { file_path: 'src/utils/chain.ts', content: 'export const other = 1;\n' },
+  }));
+w('src/utils/chain.ts', 'export const CHAIN_STATUS = 1;\nexport const useChain = () => CHAIN_STATUS;\n');
+rm('.codebuddy/human-review.json');
+add('HR-2', '人审关闭后红线仍 deny', 'deny',
+  hook('pre-write', {
+    session_id: 'hr2',
+    tool_input: { file_path: 'src/utils/chain.ts', content: 'export const other = 1;\n' },
+  }));
+w('src/utils/chain.ts', 'export const CHAIN_STATUS = 1;\nexport const useChain = () => CHAIN_STATUS;\n');
 
 // ── L1 禁改清单 ──
 add('L1-4', '写禁改清单里的路径 → 拦', 'deny',
@@ -425,19 +477,10 @@ const del3 = 'l5d';
 hook('pre-write', { session_id: del3, tool_input: { file_path: 'src/views/page/index.tsx' } });
 add('L5-5', 'mode=block 且无证据 → 阻止停止', 'continue-false', hook('stop', { session_id: del3 }));
 
-// ── 需求复述 ──
-writeGuard({ 'process/restate.json': { enabled: true } });
-add('R-1', '指代不明 → 提醒', 'context',
-  hook('user-prompt-submit', { session_id: 'r1', prompt: '帮我把那个组件重构一下，顺便把样式也统一起来' }));
-add('R-2', '太短的提问 → 跳过', 'allow',
-  hook('user-prompt-submit', { session_id: 'r1', prompt: '改个颜色' }));
-add('R-3', '纯提问 → 跳过', 'allow',
-  hook('user-prompt-submit', { session_id: 'r1', prompt: '为什么这个组件会重复渲染两次呢？' }));
-
 // ══════════════════ 阶段 C · 删掉 guard 配置，验零行为变化 ══════════════════
 
 phase = 'C';
-rm('.codebuddy/guard');
+rm('.codebuddy/process-gates.json'); rm('.codebuddy/facts.json');
 
 add('Z1', '删掉 guard 后：公共层守卫仍拦', 'deny',
   hook('pre-write', { session_id: 'z', tool_input: { file_path: 'src/components/Existing/index.tsx' } }));

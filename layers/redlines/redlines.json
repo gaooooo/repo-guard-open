@@ -1,0 +1,82 @@
+{
+  "_": "红线。【示例】confirmed=false 不当硬拦。改成本仓符号后把 confirmed 设为 true，并跑 repo-guard audit。",
+  "rules": [
+    {
+      "id": "RL-001",
+      "rule": "已发布错误码字段不得改名或删除",
+      "reason": "【示例】已随 SDK 发布，旧客户端在解析",
+      "protects": [
+        "error_code",
+        "error_description"
+      ],
+      "paths": [
+        "internal/**",
+        "pkg/**"
+      ],
+      "violation_action": "stop_and_ask",
+      "confirmed": false
+    },
+    {
+      "id": "RL-002",
+      "rule": "鉴权结论字段不得削弱语义",
+      "reason": "【示例】网关按该字段做放行，改语义会造成越权或误杀",
+      "protects": [
+        "allow",
+        "deny",
+        "auth_result"
+      ],
+      "paths": [
+        "internal/**"
+      ],
+      "violation_action": "stop_and_ask",
+      "confirmed": false
+    },
+    {
+      "id": "RL-003",
+      "rule": "密钥与 token 不得写入代码或配置仓库",
+      "reason": "【示例】凭据进入版本库即视为泄露，必须轮转",
+      "protects": [
+        "secret",
+        "private_key",
+        "access_token"
+      ],
+      "paths": [
+        "**/*"
+      ],
+      "violation_action": "stop_and_ask",
+      "confirmed": false
+    },
+    {
+      "id": "RL-004",
+      "rule": "对外接口路径与方法不得原地破坏性修改",
+      "reason": "【示例】破坏性变更必须新增接口并给共存期",
+      "protects": [
+        "Handle",
+        "Register",
+        "Route"
+      ],
+      "paths": [
+        "router/**",
+        "cmd/**"
+      ],
+      "violation_action": "stop_and_ask",
+      "confirmed": false
+    },
+    {
+      "id": "RL-005",
+      "rule": "主键与租户隔离字段不得删除",
+      "reason": "【示例】缺少租户字段会导致串数据",
+      "protects": [
+        "tenant_id",
+        "app_id",
+        "uin"
+      ],
+      "paths": [
+        "internal/dto/**",
+        "internal/model/**"
+      ],
+      "violation_action": "stop_and_ask",
+      "confirmed": false
+    }
+  ]
+}

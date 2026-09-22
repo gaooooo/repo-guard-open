@@ -97,7 +97,7 @@ function mergeOne(base: StandardItem, patch: StandardItem, patchRaw: Record<stri
 /**
  * 合并两层。
  *
- * @param global 全局层条目（插件内 templates/standards/）
+ * @param global 全局层条目（插件内 layers/skills/standards/）
  * @param project 项目层条目（<repo>/.codebuddy/standards/）
  * @param projectRaw 项目层条目的原始对象，按 id 索引。用来判断"哪些字段被显式写了"
  */

@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { CodeGraph } from './graph/types.js';
+import type { CodeGraph } from '../graph/types.js';
 
 export function normalizePublicLayerPrefix(pattern: string): string {
   const p = pattern.replace(/\\/g, '/').replace(/^\.\//, '');

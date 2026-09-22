@@ -1,0 +1,14 @@
+{
+  "_": "合并门禁示例，不会自动生效。按需贴进宿主 permissions；真正卡主干靠 CI。",
+  "permissions": {
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(kubectl:*)",
+      "Bash(mysql:*)",
+      "Bash(redis-cli:*)",
+      "Bash(rm:*)"
+    ]
+  }
+}

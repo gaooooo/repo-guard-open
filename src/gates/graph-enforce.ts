@@ -14,8 +14,8 @@
  *   · 改已有文件被拦 → AI 去查一下就好，成本一次工具调用
  *   · 新建文件被拦   → AI 可能干脆放弃这个方案，或者换个目录绕过去
  *
- * 所以这三条**必须由人显式配 pathPatterns 才生效**，不做目录名的内置猜测。
- * 默认关。配置见 `.codebuddy/guard/process/graph-enforce.json`。
+ * pathPatterns 由 init 按本仓已有目录填，默认 enabled=false。
+ * 硬拦仍要人打开 admission 和对应 enabled，避免猜错路径后误伤。
  *
  * ── 为什么"查过"只按会话记、不按文件记，但要按仓记 ──
  * 与 impact 不同：impact 是"查这个文件的影响面"，必须按文件记
@@ -27,6 +27,7 @@
  * 等于让模型照着另一个仓的约定写。所以判据带 repoDir。
  */
 import { hasHotQueried, hasLibSearched, hasSimilarSearched } from '../runtime/session-state.js';
+import { componentDocsHint, readFacts } from '../runtime/repo-facts.js';
 import type { GuardConfig } from './config.js';
 
 /** 路径是否命中任一模式。模式支持结尾 `**`、目录前缀、精确路径 */
@@ -62,8 +63,9 @@ export function judgeGraphEnforce(
   rel: string,
   exists: boolean,
 ): EnforceVerdict {
-  if (!cfg.gates.L1_admission || exists) return PASS;
+  if (!cfg.gates.admission || exists) return PASS;
   const g = cfg.graphEnforce;
+  const docs = componentDocsHint(readFacts(repoDir));
 
   if (
     g.newPageSimilar.enabled &&
@@ -74,9 +76,9 @@ export function judgeGraphEnforce(
       blocked: true,
       kind: 'need_similar',
       reason:
-        `要新建页面 \`${rel}\`，但本轮还没查过仓里同类页面怎么写的。\n` +
-        '先调 similar 工具（intent="要做什么"，如「带分页和搜索的列表页」）拿到同类页骨架，照着写。\n' +
-        '平行再造一套写法的代价不在这次提交 —— 在半年后没人说得清这个仓有几种列表页实现。',
+        `要新建 \`${rel}\`，但本轮还没查过仓里同类实现。\n` +
+        '先调 similar 工具（intent="要做什么"：前端如「带分页和搜索的列表页」，后端如「带租户校验的查询接口」）。\n' +
+        '平行再造一套写法的代价不在这次提交 —— 在半年后没人说得清这个仓有几种同类实现。',
     };
   }
 
@@ -109,7 +111,8 @@ export function judgeGraphEnforce(
         `要新建组件 \`${rel}\`，但本轮还没查过本仓 UI 组件库。\n` +
         '先调 lib_search 工具（intent="要什么组件"，如「多选下拉」）。\n' +
         '内部组件库不在你的训练数据里 —— 凭 antd / MUI 经验写的 props 几乎一定是错的，' +
-        '而且仓里很可能已经有这个组件了。',
+        '而且仓里很可能已经有这个组件了。' +
+        (docs ? '\n' + docs : ''),
     };
   }
 

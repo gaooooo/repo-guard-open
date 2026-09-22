@@ -22,10 +22,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { buildGraphAuto } from '../engine/graph/registry.js';
-import { emptyGraph, type CodeGraph } from '../engine/graph/types.js';
-import { MAX_FILES, SKIP_DIRS } from '../engine/graph/analyzers/lexical-utils.js';
-import { readHeadSha } from '../engine/graph-report.js';
+import { buildGraphAuto } from '../graph/registry.js';
+import { emptyGraph, type CodeGraph } from '../graph/types.js';
+import { MAX_FILES, SKIP_DIRS } from '../graph/analyzers/lexical-utils.js';
+import { readHeadSha } from '../graph/graph-report.js';
 import { cachePath, readJson } from './paths.js';
 
 /** 缓存元信息：判失效用 */

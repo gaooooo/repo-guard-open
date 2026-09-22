@@ -2,7 +2,7 @@
 
 > 这份文档是**内容**：各端要遵循什么、哪条能硬拦、哪条只能提醒、哪条根本不该由插件管。
 > 对应的**机制**（落到哪个文件哪个字段哪个 hook）见 [`CONTROL-POINTS.md` §14](CONTROL-POINTS.md#14-研发规范落点索引)。
-> 对应的**可执行配置**是 `templates/standards/`，铺到仓库后在 `<repo>/.codebuddy/standards/`。
+> 对应的**可执行配置**是 `layers/skills/standards/`，铺到仓库后在 `<repo>/.codebuddy/standards/`。
 
 ---
 
@@ -12,7 +12,7 @@
 
 | 层 | 位置 | 谁维护 | 语义 |
 | :--- | :--- | :--- | :--- |
-| **全局** | 插件内 `templates/standards/*.json` | 规范owner（改这里 = 定制部门模板） | 所有项目的默认基线 |
+| **全局** | 插件内 `layers/skills/standards/*.json` | 规范owner（改这里 = 定制部门模板） | 所有项目的默认基线 |
 | **项目** | `<repo>/.codebuddy/standards/*.json` | 仓库维护者，**进 git** | 覆盖 / 关闭 / 新增全局条目 |
 
 合并按 `id`，字段级浅合并 —— 项目层只写要改的字段，其余继承全局。

@@ -39,5 +39,5 @@
 
 | 打算做什么 | 为什么还没做 |
 |---|---|
-| `/repo-guard:guard-init` —— 把 `templates/guard/` 铺进用户仓库的 `.codebuddy/guard/` | 七道门配置还没接进运行时（P4）。先铺一堆没人读的配置文件只会让人困惑 |
+| `/repo-guard:guard-init` —— 把 `layers/process-gates/` 铺进用户仓库的 `.codebuddy/guard/` | 七道门配置还没接进运行时（P4）。先铺一堆没人读的配置文件只会让人困惑 |
 | `/repo-guard:trace` `/repo-guard:similar` `/repo-guard:lib` | 这三个是模型该自己调的，人手动触发的场景少。要加也是等有人提 |

@@ -18,8 +18,8 @@
  * 恰好制造了上面说的那种错误答案。所以只保留它的前两级：精确、
  * 以及忽略首尾斜杠与大小写。
  */
-import { renderTrace, type ReportContext } from '../engine/graph-report.js';
-import type { CodeGraph } from '../engine/graph/types.js';
+import { renderTrace, type ReportContext } from '../graph/graph-report.js';
+import type { CodeGraph } from '../graph/types.js';
 
 /** 去掉可能带的 HTTP 动词前缀（`GET /x` → `/x`） */
 const METHOD_PREFIX = /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|PAGE)\s+/i;

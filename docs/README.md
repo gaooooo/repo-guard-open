@@ -1,6 +1,6 @@
 # 组件目录里不要放 README
 
-`agents/` `commands/` `skills/` `output-styles/` 这四个目录下的每个 `.md`
+`agents/` `commands/` `skills/` 这三个目录下的每个 `.md`
 都会被宿主当成一个**组件定义**载入。
 
 真机实测踩过：`agents/README.md` 变成了一个名叫 `README` 的 agent，
@@ -14,11 +14,23 @@
 | [`docs/commands.md`](commands.md) | `commands/` —— 斜杠命令、为什么命令这么少 |
 | [`docs/skills.md`](skills.md) | `skills/` —— 技能、description 怎么写、frontmatter hooks 的闸门 |
 
-## 例外
+控制面说明与示例（汇报页，左菜单右内容）：[`control-examples.html`](control-examples.html)。
 
-`themes/README.md` 与 `monitors/README.md` 可以留在原地 ——
-那两个目录是 Claude 标准字段，CodeBuddy **根本不加载**，放什么都不会被误读。
-它们存在的意义就是说明"这个控制点在本宿主下无效"。
+分层重构：[`DESIGN-SEVEN-LAYERS.md`](DESIGN-SEVEN-LAYERS.md)（作者目录 `layers/`）。
 
-`templates/guard/README.md` 同理：`templates/` 不是宿主认识的组件目录，
-它只是 `repo-guard guard init` 的数据源，而且 `guard init` 明确只铺 `.json`。
+过程门禁说明：[`PROCESS-GATES.md`](PROCESS-GATES.md)。
+
+红线说明：[`REDLINES.md`](REDLINES.md)。
+
+图谱说明：[`GRAPH.md`](GRAPH.md)。
+
+人审说明：[`HUMAN-REVIEW.md`](HUMAN-REVIEW.md)。
+
+合并门禁说明：[`MERGE-GATES.md`](MERGE-GATES.md)。
+
+组件规范说明：[`COMPONENT-SPEC.md`](COMPONENT-SPEC.md)。
+
+UI 规范说明：[`UI-SPEC.md`](UI-SPEC.md)。
+
+`layers/process-gates/README.md` 可以留在 `layers/`：那不是宿主认识的组件目录，
+只是 `repo-guard guard init` 的数据源，而且 `guard init` 明确只铺 `.json`。

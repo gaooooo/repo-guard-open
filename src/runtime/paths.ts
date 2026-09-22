@@ -25,6 +25,19 @@ export const CONFIG_DIR = '.codebuddy';
 /** 图谱缓存子目录。不进 git（`init --write` 会追加到 .gitignore） */
 export const CACHE_DIR = `${CONFIG_DIR}/.cache`;
 
+/**
+ * 插件包根目录。产物打包后 `__dirname` 指向 `bin/`，所以往上一级。
+ * 作者面 `layers/`、宿主发现面 `skills/` 都挂在这一层。
+ */
+export function pluginRoot(): string {
+  return path.resolve(__dirname, '..');
+}
+
+/** 插件包内文件。例：`pluginPath('layers', 'redlines', 'redlines.json')` */
+export function pluginPath(...parts: string[]): string {
+  return path.join(pluginRoot(), ...parts);
+}
+
 /** 往上找仓库根的锚点。按优先级 —— .git 最可信 */
 const ROOT_ANCHORS = ['.git', 'package.json', 'go.mod', 'pom.xml', 'build.gradle', 'pyproject.toml'];
 

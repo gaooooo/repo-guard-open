@@ -54,7 +54,7 @@ function segment(title: string, body: string[], maxTokens = SEGMENT_MAX_TOKENS):
   if (!lines.length) return [];
   const out = [title, ...lines];
   if (truncated > 0) {
-    out.push(`（还有 ${truncated} 条超出本段 ${maxTokens} token 预算，已截断 —— 完整清单见 .codebuddy/guard/）`);
+    out.push(`（还有 ${truncated} 条超出本段 ${maxTokens} token 预算，已截断 —— 完整清单见 .codebuddy/facts.json）`);
   }
   return out;
 }
@@ -63,11 +63,36 @@ function segment(title: string, body: string[], maxTokens = SEGMENT_MAX_TOKENS):
 export function guardSegment(facts: RepoFacts): string[] {
   const layers = facts.publicLayer.map(normalizePrefix).filter(Boolean);
   const layerText = layers.length ? layers.join('、') : '（未配置）';
-  return [
+  const lines = [
     `本项目已接入 repo-guard。公共层目录：${layerText}。`,
     '改这些目录下**已有**的文件之前，必须先调 impact 工具确认影响面；受影响入口 ≥ 5 时只允许新增可选参数。',
     `单文件超过 ${facts.lineLimit} 行需要拆分。影响面为 0 不等于可以删 —— 注意工具输出里的盲区清单。`,
   ];
+  if (facts.componentLibrary) {
+    lines.push(`UI 组件库锁定为 ${facts.componentLibrary}，禁止引入第二套。`);
+  }
+  const mcp = facts.componentMcp;
+  if (mcp) {
+    lines.push(
+      `写或改组件前必须调用 MCP「${mcp}」查阅组件文档和 props。lib_search 只回答「库里有没有」；具体 API 以该 MCP 为准，禁止凭 antd / MUI 记忆编写。`,
+    );
+  }
+  return lines;
+}
+
+/** 保序去重。facts.json 在前（新写的位置），redlines.json 在后（旧模板遗留）。 */
+function uniqueKeepOrder(groups: string[][]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const group of groups) {
+    for (const raw of group) {
+      const s = raw.trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
 }
 
 /**
@@ -93,7 +118,7 @@ export function buildInjection(
 
   if (facts) blocks.push(guardSegment(facts));
 
-  if (cfg.gates.L0_inject) {
+  if (cfg.gates.inject) {
     const i = cfg.inject;
 
     if (i.mission || i.facts.length) {
@@ -109,8 +134,15 @@ export function buildInjection(
       ),
     );
     blocks.push(segment('## 禁忌（不硬拦，但别这么干）', i.taboos.map((t) => `- ${t}`)));
+
+    // 停止条件曾写在 redlines.json（deerclaw policy.yaml 的形状），后来收到
+    // facts.json。两边都读，避免旧仓写了却开场看不见 —— 那是静默丢配置。
+    const stopConditions = uniqueKeepOrder([
+      i.stopConditions,
+      snapshot.policy.stop_conditions,
+    ]);
     blocks.push(
-      segment('## 必须停下来问人的情况', i.stopConditions.map((s) => `- ${s}`)),
+      segment('## 必须停下来问人的情况', stopConditions.map((s) => `- ${s}`)),
     );
 
     const rules = activeRules(snapshot);
@@ -135,7 +167,7 @@ export function buildInjection(
  * 语义判定错了会**错注入** —— 给改样式的任务塞一份支付流程必读，是纯粹的伤害。
  */
 export function matchTaskRoutes(cfg: GuardConfig, prompt: string): string {
-  if (!cfg.gates.L0_inject || !cfg.inject.taskRoutes.length) return '';
+  if (!cfg.gates.inject || !cfg.inject.taskRoutes.length) return '';
   const text = (prompt ?? '').toLowerCase();
   if (!text.trim()) return '';
 

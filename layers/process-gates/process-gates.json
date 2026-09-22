@@ -1,0 +1,68 @@
+{
+  "_": "过程门禁。改开关即可。公共层 impact 由 repo-facts 驱动。noRefactor 示例 confirmed=false，不会硬拦。",
+  "inject": true,
+  "admission": false,
+  "loop": {
+    "enabled": false,
+    "repeatToolCallThreshold": 3,
+    "consecutiveFailThreshold": 3,
+    "sameFileWriteFailThreshold": 2
+  },
+  "signals": false,
+  "delivery": {
+    "enabled": false,
+    "engineeringCheck": "warn",
+    "maxDeliveryFiles": null
+  },
+  "governance": true,
+  "noRefactor": [
+    {
+      "path": "internal/legacy/**",
+      "reason": "【示例】历史兼容逻辑，边界条件缺少测试",
+      "confirmed": false
+    },
+    {
+      "path": "internal/migrate/**",
+      "reason": "【示例】一次性迁移脚本，改动风险不可逆",
+      "confirmed": false
+    },
+    {
+      "path": "third_party/**",
+      "reason": "【示例】第三方生成代码，应改上游再生成",
+      "confirmed": false
+    },
+    {
+      "path": "**/generated/**",
+      "reason": "【示例】生成物，不要手改",
+      "confirmed": false
+    },
+    {
+      "path": "cmd/compat/**",
+      "reason": "【示例】兼容入口，冻结直到明确下线方案",
+      "confirmed": false
+    }
+  ],
+  "scope": {
+    "enabled": false,
+    "allowlist": [],
+    "maxFiles": null
+  },
+  "newPageSimilar": {
+    "_": "新建页/接口前查 similar。init 会按本仓已有目录填 pathPatterns。enabled 默认关，硬拦还要 admission=true。",
+    "enabled": false,
+    "pathPatterns": []
+  },
+  "newComponentHot": {
+    "_": "新建公共模块/组件前查 hot。init 按本仓目录填 pathPatterns。enabled 默认关。",
+    "enabled": false,
+    "pathPatterns": []
+  },
+  "newComponentLibSearch": {
+    "_": "新建 UI 组件前查 lib_search。无 UI 库时 patterns 为空。enabled 默认关。",
+    "enabled": false,
+    "pathPatterns": []
+  },
+  "review": {
+    "enabled": false
+  }
+}

@@ -22,7 +22,7 @@ import { configPath, readJson, writeJson } from './paths.js';
 /**
  * 行数上限的最终兜底。超过只提醒不拦 —— 存量超长文件遍地都是，硬拦等于没法干活。
  *
- * **不要因为有了 `templates/repo-facts.defaults.json` 就删掉它。** 它是第三层兜底：
+ * **不要因为有了 `layers/facts/repo-facts.defaults.json` 就删掉它。** 它是第三层兜底：
  * 项目层字段缺失 → 部门默认 → 这个常量。部门模板读不到（比如包被裁过）时还得靠它。
  */
 export const DEFAULT_LINE_LIMIT = 500;
@@ -44,11 +44,10 @@ export interface ResolvedDefaults {
 /**
  * 部门默认值模板在插件里的位置。
  *
- * `__dirname` 在打包后的 CJS 产物里指向 `bin/`，往上一级找 `templates/`，
- * 与 `standardsTemplateDir()` / `redlinesTemplateFile()` 同构。
+ * 作者面：`layers/facts/repo-facts.defaults.json`。
  */
 export function factsDefaultsFile(): string {
-  return path.resolve(__dirname, '..', 'templates', 'repo-facts.defaults.json');
+  return path.resolve(__dirname, '..', 'layers', 'facts', 'repo-facts.defaults.json');
 }
 
 /**
@@ -56,7 +55,7 @@ export function factsDefaultsFile(): string {
  *
  * ⚠️ **这个函数绝不能影响「项目层文件不存在」时的行为。** 它只在 `readFacts`
  * 已经确认项目层存在之后被调用，用来补齐那份文件没写的字段。
- * 详见本文件 `readFacts` 里的注释与 templates/repo-facts.defaults.json 的 `_`。
+ * 详见本文件 `readFacts` 里的注释与 layers/facts/repo-facts.defaults.json 的 `_`。
  */
 export function readFactsDefaults(): ResolvedDefaults {
   const raw = readJson<RepoFactsDefaults>(factsDefaultsFile());
@@ -80,6 +79,11 @@ export interface RepoFacts {
   publicLayer: string[];
   /** UI 组件库包名，如 `antd`。null = 本仓没有或识别不出 */
   componentLibrary: string | null;
+  /**
+   * 组件文档 MCP 在宿主里的注册名，如 garden-mcp-component。
+   * null = 不注入「去查这个 MCP」。lib_search 仍可用。
+   */
+  componentMcp?: string | null;
   lineLimit: number;
   generatedAt: string;
 }
@@ -97,7 +101,7 @@ export function factsFile(repoDir: string): string {
  *
  * ── 部门默认值只在 null 分支**之后**参与 ──
  * 下面那句 `if (!raw) return null` 是整个写前守卫的总开关，**一个字都不能动**。
- * 部门默认值（`templates/repo-facts.defaults.json`）解决的是另一个问题：
+ * 部门默认值（`layers/facts/repo-facts.defaults.json`）解决的是另一个问题：
  * 项目层文件**存在但某个字段没写**时用什么值。
  *
  * 这两件事在改造前是同一件事（都由硬编码常量兜底），现在拆成了两件。
@@ -124,9 +128,28 @@ export function readFacts(repoDir: string): RepoFacts | null {
     // 这一行的结果与改造前逐字相同
     componentLibrary:
       typeof raw.componentLibrary === 'string' ? raw.componentLibrary : d.componentLibrary,
+    componentMcp:
+      typeof raw.componentMcp === 'string' && raw.componentMcp.trim()
+        ? raw.componentMcp.trim()
+        : null,
     lineLimit: typeof raw.lineLimit === 'number' && raw.lineLimit > 0 ? raw.lineLimit : d.lineLimit,
     generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : '',
   };
+}
+
+/** 开场注入 / lib_search / 新建拦截共用的「去查组件文档 MCP」一句。空串 = 不提。 */
+export function componentDocsHint(facts: RepoFacts | null): string {
+  const mcp = facts?.componentMcp;
+  if (!mcp) return '';
+  const lib = facts?.componentLibrary;
+  return (
+    '写或改' +
+    (lib ? ' ' + lib : '') +
+    ' 组件前，必须调用 MCP「' +
+    mcp +
+    '」查阅组件文档和 props。' +
+    'lib_search 只回答「库里有没有现成的」；具体 API 以该 MCP 为准，禁止凭 antd / MUI 记忆编写。'
+  );
 }
 
 export function writeFacts(repoDir: string, facts: RepoFacts): void {

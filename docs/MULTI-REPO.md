@@ -23,7 +23,7 @@ deerclaw 支持接入多仓，是因为它有服务端把 N 个仓的图谱都�
 
 `findRepoRoot`（`src/runtime/paths.ts:38`）从起点往上找第一个锚点
 （`.git` / `package.json` / `go.mod` / `pom.xml` / `build.gradle` / `pyproject.toml`），
-返回**单个字符串**。图谱同样是单值：`CodeGraph.repoDir`（`src/engine/graph/types.ts:214`）。
+返回**单个字符串**。图谱同样是单值：`CodeGraph.repoDir`（`src/graph/types.ts`）。
 
 好消息是边界收得很干净：
 
@@ -57,7 +57,7 @@ deerclaw 支持接入多仓，是因为它有服务端把 N 个仓的图谱都�
 - 父目录通常没有锚点 → `findRepoRoot` 要么爬到更上层某个碰巧有 `package.json` 的目录，
   要么一路找不到、返回起点本身（`paths.ts:52`）
 - 图谱从这个"根"往下扫，把两个仓的文件混进**同一张图**
-- `readHeadSha`（`src/engine/graph-report.ts:542`）读 `<root>/.git/HEAD` → 拿不到 →
+- `readHeadSha`（`src/graph/graph-report.ts`）读 `<root>/.git/HEAD` → 拿不到 →
   缓存失效判据只剩 mtime 与文件数（`src/runtime/graph-cache.ts:101`），切分支不再触发重建
 - 配置只认父目录那份 `.codebuddy/`，**各子仓自己的 redlines.json 全部被忽略**
 

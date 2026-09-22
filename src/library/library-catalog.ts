@@ -30,6 +30,20 @@ const KNOWN_UI_PACKAGES = [
 ];
 
 /**
+ * 组件库 → 文档 MCP 在宿主里的默认注册名。
+ * 真正生效的是 repo-facts.componentMcp（人可改）；这里只给 init 一个合理默认。
+ * 名称必须和宿主 MCP 列表里的 server 名一致，否则模型调不到。
+ */
+const COMPONENT_MCP_BY_LIBRARY: Record<string, string> = {
+  '@tencent/tea-component': 'garden-mcp-component',
+};
+
+export function suggestedComponentMcp(pkg: string | null | undefined): string | null {
+  if (!pkg) return null;
+  return COMPONENT_MCP_BY_LIBRARY[pkg] ?? null;
+}
+
+/**
  * 中文查询词 → 组件名/英文关键词的同义词表。
  *
  * 只收**高频且中英差异大**的那些。表太长反而会拉低精度（一个词命中一堆组件，

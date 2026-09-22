@@ -1,7 +1,7 @@
 /**
  * 面向人的报告渲染 —— CLI 用。
  *
- * ── 为什么不直接用 engine/graph-report ──
+ * ── 为什么不直接用 graph/graph-report ──
  * 那一份是**面向 agent** 的：markdown、带纪律措辞、带尾注。它是平台内工具与
  * MCP 的唯一事实源，两边共用同一段文本是刻意的（措辞不一致等于两套纪律）。
  *
@@ -15,7 +15,7 @@ import {
   hotSpots,
   STRONG_IMPACT_THRESHOLD,
   type CodeGraph,
-} from '../engine/graph-builder.js';
+} from '../graph/graph-builder.js';
 
 /** 终端分隔线。固定 52 个字符宽 —— 与标题行的视觉重量匹配 */
 export const RULE = '─'.repeat(52);

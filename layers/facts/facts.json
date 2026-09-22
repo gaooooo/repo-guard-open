@@ -1,0 +1,10 @@
+{
+  "_": "插件作者看的字段说明。项目仓的 facts.json 由 init 按本仓目录生成，不要把本文件原样拷过去。required 必须是真实存在的路径。",
+  "mission": "",
+  "facts": [],
+  "discipline": [],
+  "knowledge": [],
+  "taboos": [],
+  "stopConditions": [],
+  "taskRoutes": {}
+}

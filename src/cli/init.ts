@@ -18,8 +18,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { hotSpots } from '../engine/graph-builder.js';
-import type { CodeGraph } from '../engine/graph/types.js';
+import { hotSpots } from '../graph/graph-builder.js';
+import type { CodeGraph } from '../graph/types.js';
 import { missingPublicLayerWarning, patternsMissingFromGraph } from '../engine/public-layer-audit.js';
 import { CONFIG_DIR, readJson } from '../runtime/paths.js';
 import {
@@ -292,7 +292,7 @@ export function renderInit(
   }
 
   // 部门惯例：**只作为建议打出来，绝不进 publicLayer**。
-  // 让它参与计算的爆炸半径见 templates/repo-facts.defaults.json 的 _publicLayerConventions。
+  // 让它参与计算的爆炸半径见 layers/facts/repo-facts.defaults.json 的 _publicLayerConventions。
   // 出厂为空数组，所以默认情况下这一段不产生任何输出 —— parity 的 init 用例不受影响。
   const conventions = defaults.publicLayerConventions.filter(
     (c) => !guesses.some((g) => normalizePrefix(g.prefix) === normalizePrefix(c)),

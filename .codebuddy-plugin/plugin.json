@@ -49,12 +49,5 @@
   "_dependencies": [
     "待补充。可声明依赖的其他插件（支持 semver 与跨 marketplace 授权）。",
     "repo-guard 的引擎已经打包进 bin/，零外部依赖，不需要。"
-  ],
-
-  "_experimental": [
-    "Claude 标准字段，CodeBuddy 当前只识别、不加载到运行时：",
-    "  experimental.themes   → themes/",
-    "  experimental.monitors → monitors/monitors.json",
-    "见 themes/README.md 与 monitors/README.md。"
   ]
 }

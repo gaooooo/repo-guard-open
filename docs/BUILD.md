@@ -12,7 +12,7 @@ npm run check
 |---|---|---|
 | 1 | `tsc --noEmit` | 类型 |
 | 2 | `node build/build.mjs` | 打包 + **冒烟**（产物必须能跑起来并输出帮助） |
-| 3 | `node bin/verify-hooks.mjs` | 钩子回归 59 条：拦得对 **且** 不误伤 **且** 空配置零行为变化 |
+| 3 | `node bin/verify-hooks.mjs` | 钩子回归 58 条：拦得对 **且** 不误伤 **且** 空配置零行为变化 |
 | 4 | `node build/verify-parity.mjs` | 与旧产物逐字节比对 84 条 + MCP 长连接存活 |
 
 **只有 `npm run check` 全绿才算改完。** 单跑 `npm run build` 不够 —— 它只保证能跑起来，
@@ -36,7 +36,7 @@ codebuddy --plugin-dir /Users/gaoxin/Documents/AI/repo-guard
 | `npm run build` | 只要产物，不验收（比如想先手动试一下） |
 | `npm run build:dev` | 不压缩 + sourcemap。排查产物里的异常栈时用 |
 | `npm run typecheck` | 只看类型 |
-| `npm run verify` | 只跑 59 条钩子回归 |
+| `npm run verify` | 只跑 58 条钩子回归 |
 | `npm run verify:parity` | 只跑 84 条产物一致性 |
 | `npm run pack` | 打部门模板包（= `check` + 打包），见下一节 |
 | `node build/pack.mjs --no-archive` | 只产目录不打 tar.gz，便于 diff / review |
@@ -74,15 +74,15 @@ npm run pack        # = npm run check + node build/pack.mjs
 `build.mjs` 的冒烟证明"产物在本仓能跑"，而这里要证明"产物**在包的目录布局下**能跑"：
 
 1. `node <dist>/bin/repo-guard` → 帮助输出对
-2. `<dist>/bin/repo-guard standards init`（干跑）→ 验证 `templates/` 的相对位置
-3. `node <dist>/bin/verify-hooks.mjs` → 59 条全绿
+2. `<dist>/bin/repo-guard standards init`（干跑）→ 验证 `layers/` 的相对位置
+3. `node <dist>/bin/verify-hooks.mjs` → 58 条全绿
 
 第 2 条是关键：`standardsTemplateDir()` 用的是 `resolve(__dirname, '..', 'templates')`，
-它依赖 `bin/` 与 `templates/` 是兄弟目录。白名单里少写一行 `templates`，
+它依赖 `bin/` 与 `layers/` 是兄弟目录。白名单里少写一行 `templates`，
 产物照样启动、帮助照样打印，**只有规范会静默消失**。
 
-> 顺带：`verify-hooks.mjs` 进包之后，部门乱填 `templates/redlines.json`
-> 会被这 59 条当场抓住。那是部门侧唯一自动化的「别把大家全拦死」闸门。
+> 顺带：`verify-hooks.mjs` 进包之后，部门乱填 `layers/redlines/redlines.json`
+> 会被这 58 条当场抓住。那是部门侧唯一自动化的「别把大家全拦死」闸门。
 
 ### 部门侧怎么自检
 
@@ -90,7 +90,7 @@ npm run pack        # = npm run check + node build/pack.mjs
 
 ```bash
 bin/repo-guard doctor       # 配置体检：JSON 坏没坏、条目会不会静默失效、注入配额
-node bin/verify-hooks.mjs   # 59 条钩子回归
+node bin/verify-hooks.mjs   # 58 条钩子回归
 ```
 
 `doctor` 存在的理由：整个读配置链路都是 **fail-safe** 的（`readJson` 吞异常、
@@ -103,15 +103,15 @@ node bin/verify-hooks.mjs   # 59 条钩子回归
 | 改了 | 必须跑 |
 |---|---|
 | `src/**` | `npm run check` |
-| `src/engine/graph/analyzers/py_graph.py` | `node build/sync-py-source.mjs` 然后 `npm run check` |
+| `src/graph/analyzers/py_graph.py` | `node build/sync-py-source.mjs` 然后 `npm run check` |
 | `hooks/hooks.json` / `.mcp.json` / `.lsp.json` / `plugin.json` | `codebuddy plugin validate .` + 会话里 `/reload-plugins` |
 | `skills/**` / `commands/**` / `agents/**` | 会话里 `/reload-plugins`（不用重新构建） |
-| `templates/guard/**` | JSON 语法 + `repo-guard guard init` 干跑一次看文件清单对不对 |
+| `layers/process-gates/**` | JSON 语法 + `repo-guard guard init` 干跑一次看文件清单对不对 |
 | `src/mcp/**` | `npm run check`（parity 末尾有 MCP 长连接断言）**+ 真机装一次** |
 
 ## 组件目录里不要放 README
 
-`agents/` `commands/` `skills/` `output-styles/` 下的每个 `.md` 都会被宿主
+`agents/` `commands/` `skills/` 下的每个 `.md` 都会被宿主
 当成**一个组件定义**载入。`agents/README.md` 会变成一个名叫 `README` 的 agent，
 出现在用户的 `/agents` 菜单里。
 

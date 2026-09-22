@@ -8,7 +8,7 @@
  * 这与 `policy-engine.ts` 导出 `globMatch` 给 `policy-audit` 复用是同一条纪律。
  *
  * ── 硬约束：项目层不存在 = 零行为变化 ──
- * 全局层（插件内 `templates/standards/`）**装上插件就存在**，所以不能拿它驱动
+ * 全局层（插件内 `layers/skills/standards/`）**装上插件就存在**，所以不能拿它驱动
  * 任何注入或提醒 —— 否则所有人一升级插件就被迫接受一堆新输出。
  * 只有仓库里铺了 `.codebuddy/standards/` 才算"用户明确表达了按它办"。
  *
@@ -136,7 +136,7 @@ export interface BudgetReport {
  * 注入配额预估。给 `doctor` 用。
  *
  * ── 为什么不过 `isActionable` ──
- * 部门在填 `templates/` 时**根本没有项目层**，走闸门的话永远返回空，
+ * 部门在填 `layers/` 时**根本没有项目层**，走闸门的话永远返回空，
  * 这个检查就废了。闸门回答的是"运行时要不要生效"，而 doctor 问的是
  * "**如果生效了**会不会被截断" —— 两个问题，同一套行构造。
  *

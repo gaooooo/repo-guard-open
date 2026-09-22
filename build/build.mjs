@@ -42,8 +42,8 @@ const OUT = path.resolve(flag('--out') ?? path.join(ROOT, 'bin', 'repo-guard'));
  * 空图是最坏的失败模式：模型会把"没有调用者"当事实去删代码。所以这里硬失败。
  */
 function assertPySourceInSync() {
-  const py = path.join(ROOT, 'src', 'engine', 'graph', 'analyzers', 'py_graph.py');
-  const ts = path.join(ROOT, 'src', 'engine', 'graph', 'analyzers', 'py-graph-source.ts');
+  const py = path.join(ROOT, 'src', 'graph', 'analyzers', 'py_graph.py');
+  const ts = path.join(ROOT, 'src', 'graph', 'analyzers', 'py-graph-source.ts');
   if (!fs.existsSync(py) || !fs.existsSync(ts)) {
     console.error(`[build] 缺文件，无法校验 Python 分析器一致性：\n  ${py}\n  ${ts}`);
     process.exit(1);

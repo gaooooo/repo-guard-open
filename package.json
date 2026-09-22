@@ -13,9 +13,10 @@
     "typecheck": "tsc --noEmit",
     "verify": "node bin/verify-hooks.mjs",
     "verify:parity": "node build/verify-parity.mjs",
-    "check": "npm run typecheck && npm run build && npm run verify && npm run verify:parity",
+    "check": "npm run typecheck && npm run build && npm run verify && npm run verify:parity && npm run verify:facts",
     "//pack": "打部门模板包。先跑 check —— 一个没过回归的包发给别的部门，问题会在我们看不见的地方出现。",
-    "pack": "npm run check && node build/pack.mjs"
+    "pack": "npm run check && node build/pack.mjs",
+    "verify:facts": "node build/verify-facts-init.mjs"
   },
   "dependencies": {
     "@babel/parser": "^8.0.4",

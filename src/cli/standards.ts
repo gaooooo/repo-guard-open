@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONFIG_DIR, toRepoRelative } from '../runtime/paths.js';
+import { CONFIG_DIR, configPath, toRepoRelative } from '../runtime/paths.js';
 import { RULE } from './render.js';
 import {
   STANDARDS_DIR,
@@ -256,80 +256,42 @@ function templateFileList(tpl: string): string[] {
  * 铺过去的是**团队共识**，重跑一次把人写的覆盖掉是不可接受的数据丢失。
  */
 export function runStandardsInit(repoDir: string, write: boolean): StandardsResult {
-  const tpl = standardsTemplateDir();
-  const target = standardsDirOf(repoDir);
-  const present = templateFileList(tpl);
-
-  const lines = head('研发规范配置骨架');
-
-  if (!present.length) {
-    return {
-      text:
-        `${lines.join('\n')}\n\n找不到规范模板：${tpl}\n` +
-        '`bin/repo-guard` 与 `templates/` 必须在同一个插件目录下。\n',
-      exitCode: 2,
-    };
+  const src = path.join(standardsTemplateDir(), "standards.json");
+  const dest = configPath(repoDir, "standards.json");
+  const lines = head("研发规范总闸");
+  if (!fs.existsSync(src)) {
+    return { text: lines.join("\n") + "\n\n找不到规范模板\n", exitCode: 2 };
   }
-
-  const fresh: string[] = [];
-  const existing: string[] = [];
-  for (const f of present) {
-    (fs.existsSync(path.join(target, f)) ? existing : fresh).push(f);
+  lines.push("目标    .codebuddy/standards.json  （只写总闸，条目用插件全局层）");
+  if (fs.existsSync(dest)) {
+    lines.push("", "已存在，不会覆盖。");
+    return { text: lines.join("\n") + "\n", exitCode: 0 };
   }
-
-  lines.push(`目标    ${CONFIG_DIR}/${STANDARDS_DIR}/`);
-  lines.push(`模板    ${present.length} 个文件`);
-
-  if (existing.length) {
-    lines.push('', `已存在 ${existing.length} 个，**不会覆盖**：`);
-    for (const f of existing) lines.push(`    - ${f}`);
-    lines.push('    模板若有新增条目，对照 templates/standards/ 自己补。');
-  }
-  if (fresh.length) {
-    lines.push('', `将写入 ${fresh.length} 个：`);
-    for (const f of fresh) lines.push(`    + ${f}`);
-  }
-
-  lines.push(
-    '',
-    '铺过去之后做三件事：',
-    '  1. 进 git —— 这些是团队共识，不是个人偏好',
-    '  2. 打开 standards.json 按本仓实际情况改 stacks；',
-    '     **纯前端仓要把 database 与 message-queue 设成 off**',
-    '  3. 把 paths 改成本仓真实目录，把 symbols 填成本仓真实的受保护字段名',
-    '',
-    'maxSeverity 默认 remind —— 铺完不会有任何新的拦截。',
-    '想开硬拦先看 `repo-guard governance` 的数据，再逐档上调。',
-  );
-
+  lines.push("", "将写入 1 个文件。maxSeverity 默认 remind，不硬拦。");
+  lines.push("纯前端仓请把 stacks.database / message-queue 设成 off。");
   if (!write) {
-    lines.push('', '要写入请加 --write');
-    return { text: `${lines.join('\n')}\n`, exitCode: 0 };
+    lines.push("", "要写入请加 --write");
+    return { text: lines.join("\n") + "\n", exitCode: 0 };
   }
-  if (!fresh.length) {
-    lines.push('', '没有需要写入的文件。');
-    return { text: `${lines.join('\n')}\n`, exitCode: 0 };
+  try {
+    const raw = JSON.parse(fs.readFileSync(src, "utf-8"));
+    const thin = {
+      _: "规范总闸。条目在插件里；这里只改开关。要覆盖某条再建 .codebuddy/standards/ 写同 id。",
+      version: raw.version ?? 1,
+      enabled: raw.enabled !== false,
+      maxSeverity: raw.maxSeverity ?? "remind",
+      stacks: raw.stacks ?? {},
+      injectBudgetTokens: raw.injectBudgetTokens ?? 1500,
+      stackDetect: raw.stackDetect ?? {},
+    };
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, JSON.stringify(thin, null, 2) + "\n");
+  } catch (e) {
+    lines.push("", "写入失败");
+    return { text: lines.join("\n") + "\n", exitCode: 1 };
   }
-
-  let written = 0;
-  const failed: string[] = [];
-  for (const f of fresh) {
-    try {
-      const dst = path.join(target, f);
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(path.join(tpl, f), dst);
-      written++;
-    } catch (e) {
-      failed.push(`${f}（${(e as Error).message}）`);
-    }
-  }
-
-  lines.push('', `已写入  ${written} 个文件到 ${CONFIG_DIR}/${STANDARDS_DIR}/`);
-  if (failed.length) {
-    lines.push('', `写入失败 ${failed.length} 个：`);
-    for (const f of failed) lines.push(`    ${f}`);
-  }
-  return { text: `${lines.join('\n')}\n`, exitCode: failed.length ? 1 : 0 };
+  lines.push("", "已写入  .codebuddy/standards.json");
+  return { text: lines.join("\n") + "\n", exitCode: 0 };
 }
 
 // ── audit ──

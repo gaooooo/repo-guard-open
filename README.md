@@ -4,6 +4,8 @@
 
 装完之后 AI 会做三件它以前不做的事：改公共层代码**之前**先确认影响面、写完超长文件会被提醒、想绕道用 `sed` 写公共层会被记一笔。
 
+开发者按七层往 [`layers/`](layers/) 添加内容（工程事实 / 技能库 / 红线 / 过程门禁 / 人审 / 合并门禁 / 图谱）。分层说明见 [`docs/PLUGIN-LAYERS.md`](docs/PLUGIN-LAYERS.md)。图谱源码在 [`src/graph/`](src/graph/)，见 [`docs/GRAPH-SPLIT.md`](docs/GRAPH-SPLIT.md)。
+
 ---
 
 ## 装完之后做什么
@@ -67,7 +69,7 @@ repo-guard standards init --write
 
 生成 `.codebuddy/standards/`：五端（L0 跨端契约 / 全端共用 / 前端 / 后端 / 数据库 / 消息队列）约 45 条规范。
 
-两层：**全局层**在插件里（`templates/standards/`，改它 = 定制部门模板），**项目层**在仓库里（按条目 `id` 字段级覆盖，要进 git）。
+两层：**全局层**在插件里（`layers/skills/standards/`，改它 = 定制部门模板），**项目层**在仓库里（按条目 `id` 字段级覆盖，要进 git）。
 
 `maxSeverity` 默认 `remind` —— **铺完不会有任何新的拦截**。想开硬拦先看 `repo-guard governance` 的数据。
 
@@ -146,7 +148,7 @@ repo-guard scan || exit 1
 node bin/verify-hooks.mjs
 ```
 
-自建临时仓库跑 59 条用例，覆盖拦截、放行、路径归一、不误伤同名前缀目录、未配置时 fail-open、坏输入不崩、七道门逐门验、空配置零行为变化。**不碰任何真实仓库。**
+自建临时仓库跑 58 条用例，覆盖拦截、放行、路径归一、不误伤同名前缀目录、未配置时 fail-open、坏输入不崩、七道门逐门验、空配置零行为变化。**不碰任何真实仓库。**
 
 改过钩子逻辑就跑一遍——证明「拦得对」容易，证明「不误伤」才是难的。
 
@@ -161,7 +163,7 @@ npm install
 npm run check      # 改完只需要跑这一条
 ```
 
-`npm run check` 按序做四件事，任一失败即停：类型检查 → 打包（含冒烟）→ 59 条钩子回归 → 84 条与旧产物的逐字节比对。
+`npm run check` 按序做四件事，任一失败即停：类型检查 → 打包（含冒烟）→ 58 条钩子回归 → 84 条与旧产物的逐字节比对。
 
 只跑 `npm run build` 不够 —— 它只保证产物能跑起来，不保证行为没漂。
 
@@ -172,26 +174,26 @@ npm run pack        # = npm run check + 打包，产出 dist/repo-guard-<版本>
 ```
 
 包里**没有 `src/`、没有 `node_modules`**，引擎是 minify 过的单文件。所以判据很明确：
-**部门需要改的一切，都以 JSON / MD 的形式躺在 `templates/` 里。**
+**部门需要改的一切，都以 JSON / MD 的形式躺在 `layers/` 里。**
 
-部门解压后读 [`templates/CONFIG.md`](templates/CONFIG.md) —— 它列全了两层所有可填点。
+部门解压后读 [`layers/CONFIG.md`](layers/CONFIG.md) —— 它列全了两层所有可填点。
 填完在包内跑自检，两条都不需要 npm：
 
 ```bash
 bin/repo-guard doctor       # 配置体检
-node bin/verify-hooks.mjs   # 59 条钩子回归，确认填的红线没把正常写文件也拦了
+node bin/verify-hooks.mjs   # 58 条钩子回归，确认填的红线没把正常写文件也拦了
 ```
 
 部门可以在条目上写 `override_policy: "locked"` 限定各项目能改到什么程度。
 
 | 目录 | 是什么 |
 |---|---|
-| `src/engine/` | 图谱分析引擎。从 deerclaw 逐字移植，**禁止重构**，改动纪律见 `src/engine/PORTING.md` |
+| `src/graph/` / `src/engine/` | 图谱引擎 / 红线判定。禁止改打分，见 PORTING.md |
 | `src/runtime/` | 仓库定位、配置读写、图谱缓存、会话状态、埋点 |
 | `src/cli/` `src/hooks/` `src/mcp/` | 三个入口。共用一个二进制，因为它们要共享图谱缓存与会话状态 |
 | `build/` | 构建脚本 + `baseline/`（改造前的产物，逐字节比对的黄金样本，**不能删**） |
-| `templates/guard/` | 协作全景七道门的配置骨架，全部默认关 |
-| `templates/standards/` | 五端研发规范标准模板（全局层），`src/standards/` 是它的加载与合并 |
+| `layers/process-gates/` | 协作全景七道门的配置骨架，全部默认关 |
+| `layers/skills/standards/` | 五端研发规范标准模板（全局层），`src/standards/` 是它的加载与合并 |
 
 完整构建说明见 [`docs/BUILD.md`](docs/BUILD.md)，设计与控制点映射见 [`docs/DESIGN.md`](docs/DESIGN.md)，
 多仓演进（当前只守一个仓）见 [`docs/MULTI-REPO.md`](docs/MULTI-REPO.md)。
