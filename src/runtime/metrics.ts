@@ -53,6 +53,13 @@ export type MetricEvent =
   | 'standards_hit'
   /** 研发规范：block 级拦住了（受保护符号 / 必须先调工具） */
   | 'standards_deny'
+  /** 提问像新功能需求，注入了「先找参考实现」 */
+  | 'feature_hint'
+  /** similar 给出的参考与 AI 的选择（detail = 资源 / 家族） */
+  | 'similar_plan'
+  /** 写后比对：新代码与参考骨架一致 / 有偏差（detail = 偏差种类） */
+  | 'conform_ok'
+  | 'conform_drift'
   /** 会话开始 / 结束 */
   | 'session_start'
   | 'session_end';

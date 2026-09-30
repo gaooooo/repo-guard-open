@@ -41,6 +41,8 @@ const CASES = {
     ['impact', { file: 'internal/common/util.go' }],
     ['impact', { file: 'internal/common/util.go#Paginate' }],
     ['similar', { intent: 'User' }],
+    ['similar', { intent: '用户管理，新增、删除', resource: 'User', verbs: ['Create', 'Delete'] }],
+    ['similar', { intent: '开发用户管理服务，包括新增、修改、删除' }],
     ['trace', { urlPath: '/api/users' }],
     ['hot', {}],
     ['hot', { intent: 'Paginate' }],
@@ -162,6 +164,10 @@ async function similarUnit() {
   const tsDescs = fn('service/admin/token_usage.go', 'DescribeAIMTokenUsages', 10); call(tsDescs, tlDescs);
   fn('service/admin/token_usage.go', 'DeleteAIMTokenUsage', 20);
   fn('service/admin/token_usage.go', 'ModifyAIMTokenUsage', 30);
+  // 用户管理：同名 User 家族是 CLI 的 BindUser / ListUsers（不在接口层），真正的用户管理叫 AIMUser
+  fn('agent/cli/bootstrap.go', 'BindUser', 10);
+  fn('agent/cli/store.go', 'ListUsers', 10);
+  for (const [i, n] of ['DescribeAIMUsers', 'CreateAIMUser', 'ModifyAIMUser', 'DeleteAIMUsers'].entries()) fn('service/admin/user.go', n, 10 + i * 10);
   // 复数：Categories 与 Category 必须同族
   fn('service/category.go', 'DescribeCategories', 10);
   fn('service/category.go', 'CreateCategory', 20);
@@ -182,6 +188,37 @@ async function similarUnit() {
 
   const c = m.similarMethods(graph, { intent: 'Category' });
   ok(c.families[0]?.members.length === 2, `Categories 与 Category 同族（${c.families[0]?.members.length}）`);
+
+  const um = (q, label) => {
+    const r = m.similarMethods(graph, q);
+    const txt = m.renderSimilarMethods(r, 'x');
+    const all = r.verdicts.length === 3 && r.verdicts.every((v) => v.have.length);
+    ok(r.families[0]?.family === 'AIMUsers' && r.matchedBy === 'suffix' && all && /都已存在/.test(txt), `用户管理 · ${label} → AIMUser 已存在（${r.families[0]?.family} / ${r.matchedBy} / ${r.verdicts.map((v) => v.verb + ':' + v.have.length).join(' ')}）`);
+    return r;
+  };
+  const z = um({ intent: '开发用户管理服务，包括新增、修改、删除' }, '整句中文');
+  ok(z.resourceSource === 'zh' && /用户 → User/.test(m.renderSimilarMethods(z, 'x')), '整句中文：标明资源名是词表推断');
+  const pr = um({ intent: '用户管理', resource: 'User', verbs: ['Add', 'Update', 'Remove'] }, 'resource + verbs（动词归一）');
+  ok(pr.resourceSource === 'param', 'resource 参数优先于 intent');
+  const cu = m.similarMethods(graph, { intent: 'CreateUser' });
+  ok(cu.families[0]?.family === 'AIMUsers' && cu.verdicts[0]?.have[0]?.name === 'CreateAIMUser', `CreateUser 命中 AIMUser 而不是 CLI 的 User（${cu.families[0]?.family}）`);
+  const part = m.similarMethods(graph, { resource: 'AIMTokenUsage', verbs: ['Create', 'Delete'] });
+  ok(part.verdicts.map((v) => `${v.verb}:${v.have.length ? '有' : '无'}`).join(' ') === 'Create:无 Delete:有' && part.verbTemplates.length === 1, '部分缺：只为缺的动作借写法');
+  const nr = m.similarMethods(graph, { resource: 'AIMWorkload', verbs: ['Create', 'Delete'] });
+  ok(nr.matchedBy === 'template' && nr.template.chains.map((c) => c.verb).join(',') === 'Create,Delete', '新资源：模板只列要求的动作');
+  const none = m.similarMethods(graph, { intent: '做一个导出功能' });
+  ok(/拆成资源和动作/.test(none.unmatchedReason ?? ''), '拆不出资源名时要求调用方传 resource');
+
+  // 候选卡片与指定模板
+  const card = m.similarMethods(graph, { resource: 'Asset', verbs: ['Create'] });
+  ok(card.template?.cards.length >= 1 && card.template.cards[0].family === card.template.family.family && card.template.chosenBy === 'auto', '新资源：给候选卡片，第 1 张就是展开的模板');
+  ok(m.similarMethods(graph, { resource: 'Asset', template: 'AIMAgents' }).template?.chosenBy === 'param', '指定 template：按指定展开');
+  ok(/不在候选里/.test(m.renderSimilarMethods(m.similarMethods(graph, { resource: 'Asset', template: 'Nope' }), 'x')), '指定的模板不存在：明说并按默认排序');
+  const ex = m.similarMethods(graph, { resource: 'User', verbs: ['Create', 'Modify', 'Delete'] });
+  ok(ex.altCards?.length >= 1 && ex.altCards.every((c) => c.family !== 'AIMUsers') && /如果确实要另起一套/.test(m.renderSimilarMethods(ex, 'x')), '已存在：附「另起一套」的参考候选，不含它自己');
+  ok(m.layerOf('internal/tencent_ciam/user.go') === 'ext' && m.layerOf('internal/clients/pay.go') === 'ext', '外部服务封装识别为 ext 层');
+  const src = 'package admin\n\nfunc CreateAsset(c *gin.Context) {}\nfunc (s *Svc) DeleteAssets() {}\nfunc helper() {}\nfunc Validate() {}\n';
+  ok(m.crudFamiliesInSource(src).map((x) => x.key).join(',') === 'asset,asset', `从源码认出 CRUD 方法的资源（${m.crudFamiliesInSource(src).map((x) => x.name).join(',')}）`);
 
   const u = m.similarMethods(graph, { intent: 'EscapeRegex' });
   ok(!u.template && /hot/.test(u.unmatchedReason ?? ''), '工具函数不给 CRUD 模板，改提示用 hot');
@@ -235,6 +272,97 @@ async function reuseUnit() {
   ok(!n.candidates.some((c) => c.full), '没有现成的就不硬凑「可复用」');
 }
 
+
+/**
+ * 端到端：新功能需求的完整链路，全部走真实产物（钩子 + MCP 子进程）。
+ *   提示 → 新建被拦 → MCP（无会话 id，靠认领）查 similar → 放行 → 换资源被拦 → 写代码 → Stop 写后比对
+ * 这条链是「AI 自己找到参考并照着写」的证据，任何一环断了都要在这里暴露。
+ */
+async function flowE2E(sandbox) {
+  console.log('\n── 新功能链路（提示 → 参考 → 按资源守卫 → 写后比对）──');
+  const repo = path.join(sandbox, 'flow');
+  const home = path.join(sandbox, 'flow-home');
+  fs.mkdirSync(home, { recursive: true });
+  const files = {
+    'go.mod': 'module flow/api\n\ngo 1.21\n\nrequire github.com/gin-gonic/gin v1.9.1\n',
+    'router/router.go': [
+      'package router', '', 'import (', '\t"flow/api/service/admin"', '\t"github.com/gin-gonic/gin"', ')', '',
+      'func Register(r *gin.Engine) {', '\tg := r.Group("/api")',
+      '\tg.POST("/DescribeAIMAgents", admin.DescribeAIMAgents)', '\tg.POST("/CreateAIMAgent", admin.CreateAIMAgent)',
+      '\tg.POST("/ModifyAIMAgent", admin.ModifyAIMAgent)', '\tg.POST("/DeleteAIMAgent", admin.DeleteAIMAgent)', '}', '',
+    ].join('\n'),
+    'service/admin/agent.go': [
+      'package admin', '', 'import (', '\t"flow/api/internal/logic"', '\t"github.com/gin-gonic/gin"', ')', '',
+      '// DescribeAIMAgents 智能体列表', 'func DescribeAIMAgents(c *gin.Context) {', '\tc.JSON(200, logic.DescribeAgents())', '}', '',
+      '// CreateAIMAgent 创建智能体', 'func CreateAIMAgent(c *gin.Context) {', '\tlogic.CreateAgent()', '\tc.JSON(200, nil)', '}', '',
+      '// ModifyAIMAgent 修改智能体', 'func ModifyAIMAgent(c *gin.Context) {', '\tlogic.ModifyAgent()', '\tc.JSON(200, nil)', '}', '',
+      '// DeleteAIMAgent 删除智能体', 'func DeleteAIMAgent(c *gin.Context) {', '\tlogic.DeleteAgent()', '\tc.JSON(200, nil)', '}', '',
+    ].join('\n'),
+    'internal/logic/agent.go': [
+      'package logic', '', 'import "flow/api/internal/repo"', '',
+      'func DescribeAgents() []string {', '\treturn repo.Find()', '}', '',
+      'func CreateAgent() {', '\trepo.Insert()', '}', '',
+      'func ModifyAgent() {', '\trepo.Update()', '}', '',
+      'func DeleteAgent() {', '\trepo.Delete()', '}', '',
+    ].join('\n'),
+    'internal/repo/agent.go': [
+      'package repo', '', 'func Find() []string {', '\treturn nil', '}', '', 'func Insert() {}', '', 'func Update() {}', '', 'func Delete() {}', '',
+    ].join('\n'),
+    '.codebuddy/process-gates.json': JSON.stringify({ admission: true, newPageSimilar: { enabled: true, pathPatterns: ['service/'] } }, null, 2),
+  };
+  for (const [f, c] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(repo, f)), { recursive: true });
+    fs.writeFileSync(path.join(repo, f), c);
+  }
+  spawnSync('git', ['init', '-q'], { cwd: repo });
+  const SID = 'flow-real-sid';
+  const envHook = { ...process.env, HOME: home, USERPROFILE: home };
+  delete envHook.CODEBUDDY_SESSION_ID;
+  delete envHook.CLAUDE_SESSION_ID;
+  const hook = (name, input) => {
+    const r = spawnSync(process.execPath, [TOOL, 'hook', name], { cwd: repo, env: envHook, input: JSON.stringify({ cwd: repo, session_id: SID, ...input }), encoding: 'utf-8' });
+    return r.stdout || '';
+  };
+  const denied = (out) => /"permissionDecision":"deny"/.test(out);
+  const write = (file, content) => hook('pre-write', { tool_name: 'Write', tool_input: { file_path: file, content } });
+
+  const hint = hook('user-prompt-submit', { prompt: '开发资产管理，包括增删改查' });
+  ok(hint.includes('先找本仓的参考实现'), '① 提需求 → 注入「先找参考实现」');
+
+  const assetSvc = [
+    'package admin', '', 'import (', '\t"flow/api/internal/logic"', '\t"flow/api/internal/repo"', '\t"github.com/gin-gonic/gin"', ')', '',
+    '// CreateAsset 创建资产', 'func CreateAsset(c *gin.Context) {', '\tlogic.CreateAsset()', '\tc.JSON(200, nil)', '}', '',
+    // 故意跳过逻辑层：写后比对要抓到
+    '// DeleteAsset 删除资产', 'func DeleteAsset(c *gin.Context) {', '\trepo.DeleteAsset()', '\tc.JSON(200, nil)', '}', '',
+  ].join('\n');
+  ok(denied(write('service/admin/asset.go', assetSvc)), '② 没查 similar 就新建接口 → 拦');
+
+  const sim = mcpCall(repo, envHook, 'similar', { intent: '开发资产管理，包括增删改查', resource: 'Asset', verbs: ['Create', 'Delete'] });
+  ok(/参考候选/.test(sim) && /AIMAgents/.test(sim), '③ similar（MCP 无会话 id）给出参考候选');
+  ok(!denied(write('service/admin/asset.go', assetSvc)), '④ 查过 Asset 后新建 → 放行（MCP 认领到了钩子的会话）');
+  ok(!denied(write('service/admin/aim_asset.go', 'package admin\n\nfunc CreateAIMAsset() {}\n')), '④+ 照本仓前缀命名（查 Asset、写 CreateAIMAsset）→ 算同一资源，放行');
+  ok(denied(write('service/admin/widget.go', 'package admin\n\nfunc CreateWidget() {}\n')), '⑤ 换一个没查过的资源（Widget）→ 按资源拦');
+
+  // 真正落盘，并让逻辑层、存储层也经过写前钩子（记入本轮改动）
+  const logic = 'package logic\n\nimport "flow/api/internal/repo"\n\nfunc CreateAsset() {\n\trepo.InsertAsset()\n}\n';
+  const store = 'package repo\n\nfunc InsertAsset() {}\n\nfunc DeleteAsset() {}\n';
+  for (const [f, c] of [['service/admin/asset.go', assetSvc], ['internal/logic/asset.go', logic], ['internal/repo/asset.go', store]]) {
+    write(f, c);
+    fs.writeFileSync(path.join(repo, f), c);
+  }
+  const stop = hook('stop', {});
+  if (process.env.SHOW_FLOW) console.log(JSON.parse(stop).reason ?? stop);
+  ok(JSON.parse(stop).continue === false, '⑥+ 有偏差 → 阻止停止（continue:false），让 AI 照参考改');
+  ok(/写后比对 · Asset/.test(stop) && /AIMAgents/.test(stop), '⑥ Stop 时写后比对，标明参考家族');
+  ok(/✓ `service\/admin\/asset.go#CreateAsset`/.test(stop) && /✗ `service\/admin\/asset.go#DeleteAsset`.*跳过了逻辑层/.test(stop), '⑦ 照参考写的判一致，跳过逻辑层的判偏差');
+  ok(!/写后比对/.test(hook('stop', {})), '⑧ 同一结论每会话只说一次');
+  const metrics = fs.readFileSync(path.join(home, '.repo-guard', 'metrics.ndjson'), 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const ev = (e) => metrics.filter((m) => m.event === e);
+  ok(ev('similar_plan').some((m) => m.sid === SID && /new:Asset<-AIMAgents/.test(m.detail)), '⑨ 埋点：similar_plan 记在真实会话下，含「查的什么 ← 参考了谁」');
+  ok(ev('conform_drift').some((m) => m.sid === SID && /skip_logic/.test(m.detail)), '⑩ 埋点：conform_drift 记下偏差种类');
+  ok(ev('feature_hint').some((m) => m.sid === SID), '⑪ 埋点：feature_hint');
+}
+
 async function main() {
   await similarUnit();
   await reuseUnit();
@@ -246,6 +374,7 @@ async function main() {
   const home = path.join(sandbox, 'home');
   fs.mkdirSync(home, { recursive: true });
   const env = { ...process.env, HOME: home, USERPROFILE: home, CODEBUDDY_SESSION_ID: 'verify-viz' };
+  await flowE2E(sandbox);
 
   let port = 17800 + Math.floor(Math.random() * 1000);
   for (const name of Object.keys(CASES)) {

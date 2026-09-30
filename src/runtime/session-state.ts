@@ -44,6 +44,27 @@ import path from 'node:path';
 
 import { readJson, repoId, stateRoot } from './paths.js';
 
+/** 一次 similar 查询留下的参考计划 */
+export interface SimilarPlan {
+  /** repoId —— 计划只对这个仓有效 */
+  repo: string;
+  /** 资源的家族键（小写单数），如 asset、aimuser */
+  key: string;
+  /** 资源名（本仓真名），如 Asset、AIMUser */
+  resource: string;
+  /** 这次查询涉及的所有资源键（候选 + 真名），新建门按它判定「查过没有」 */
+  keys: string[];
+  /** 参考家族；资源已存在且不缺动作时为它自己 */
+  template: string | null;
+  /** 参考骨架的分层，如 ["service","logic","repo"] */
+  skeleton: string[];
+  /** 照模板推导出的方法。reuse = 本仓已有、应直接调用 */
+  planned: Array<{ layer: string; file: string; name: string; reuse: boolean }>;
+  /** 结论：new = 新资源照模板建；gap = 已有资源补动作；exists = 已存在 */
+  kind: 'new' | 'gap' | 'exists';
+  ts: number;
+}
+
 interface SessionState {
   version: number;
   /** 查过影响面的文件。key = `<repoId>:<仓库相对路径>` → 查询时间戳 */
@@ -54,6 +75,12 @@ interface SessionState {
   hotRepos: string[];
   /** 查过同类页骨架的意图。key = `<repoId>:<intent>`。给「新建页面前必须先 similar」用 */
   similarSearched: string[];
+  /**
+   * similar 给出的参考计划。给两件事用：
+   *   · 新建门按资源判定：写的是 Asset，本轮查的却是 User → 先去查 Asset
+   *   · 写后比对：新写的 Asset 是否照参考家族的分层写
+   */
+  similarPlans: SimilarPlan[];
   /** 本会话改动过的文件。元素 = `<repoId>:<仓库相对路径>`。给 L1 范围门的 maxFiles 预算用 */
   touchedFiles: string[];
   /**
@@ -137,11 +164,59 @@ export function setSessionId(id: string | undefined | null): void {
  * 是兼容名。
  */
 export function sessionId(): string {
-  const raw = override || process.env.CODEBUDDY_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+  const raw = override || process.env.CODEBUDDY_SESSION_ID || process.env.CLAUDE_SESSION_ID || adopted || '';
   const s = raw.trim();
   if (!s) return '_nosession';
   // 文件名安全：会话 id 来自宿主，不能直接当路径用（路径穿越）
   return s.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+}
+
+// ══════════════════ MCP 进程认领会话 ══════════════════
+//
+// 真机实测：宿主拉起 MCP server 时**不带** CODEBUDDY_SESSION_ID。于是 AI 调 impact 记在
+// `_nosession`，写前钩子读的是 stdin 里的真实 id —— 查了还被拦，守卫变成死循环；
+// 埋点里「AI 查了图谱」和「写入被拦 / 放行」也串不成一条链。
+//
+// 修法：钩子每次运行都把「这个仓当前是哪个会话」写进一个按仓分的指针文件；
+// MCP 进程拿不到环境变量时，按自己服务的仓去读它。同一个仓同时开两个会话时
+// 以最近活跃的为准 —— 偶尔记错会话，也比永远记不上强。
+
+let adopted: string | null = null;
+
+/** 指针多久算过期。超过就不认，免得昨天的会话替今天的放行 */
+const POINTER_TTL_MS = 12 * 3600_000;
+
+function pointerFile(repoDir: string): string {
+  return path.join(stateRoot(), 'state', '_current', `${repoId(repoDir)}.json`);
+}
+
+/** 钩子调用：记下这个仓当前的会话。没有真实 id（stdin 里没带）就不写 */
+export function bindCurrentSession(repoDir: string): void {
+  if (!override) return;
+  const sid = sessionId();
+  try {
+    const f = pointerFile(repoDir);
+    const prev = readJson<{ sid?: string; ts?: number }>(f);
+    // 同一会话一分钟内不重复写：钩子很频繁，没必要每次落盘
+    if (prev?.sid === sid && typeof prev.ts === 'number' && Date.now() - prev.ts < 60_000) return;
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ sid, ts: Date.now() }));
+  } catch {
+    /* 写不进去：MCP 退回 _nosession，行为与修之前一样 */
+  }
+}
+
+/**
+ * MCP 进程调用：环境变量里没有会话 id 时，认领这个仓当前的会话。
+ * 每次工具调用前都要调 —— 长驻进程会跨会话，不能只在启动时认一次。
+ */
+export function adoptSessionFor(repoDir: string): void {
+  adopted = null;
+  if (override || process.env.CODEBUDDY_SESSION_ID || process.env.CLAUDE_SESSION_ID) return;
+  const p = readJson<{ sid?: string; ts?: number }>(pointerFile(repoDir));
+  if (p && typeof p.sid === 'string' && typeof p.ts === 'number' && Date.now() - p.ts < POINTER_TTL_MS) {
+    adopted = p.sid;
+  }
 }
 
 function stateFile(sid: string): string {
@@ -154,6 +229,7 @@ function emptyState(): SessionState {
     queried: {},
     libSearched: [],
     similarSearched: [],
+    similarPlans: [],
     hotRepos: [],
     touchedFiles: [],
     repeatCount: {},
@@ -187,6 +263,9 @@ function load(sid: string): SessionState {
     queried: raw.queried && typeof raw.queried === 'object' ? (raw.queried as Record<string, number>) : {},
     libSearched: arr(raw.libSearched),
     similarSearched: arr(raw.similarSearched),
+    similarPlans: Array.isArray(raw.similarPlans)
+      ? raw.similarPlans.filter((p): p is SimilarPlan => !!p && typeof p === 'object' && typeof (p as SimilarPlan).key === 'string')
+      : [],
     hotRepos: arr(raw.hotRepos),
     touchedFiles: arr(raw.touchedFiles),
     repeatCount: counts(raw.repeatCount),
@@ -241,6 +320,23 @@ export function recordSimilarSearch(repoDir: string, intent: string): void {
   const key = scopedKey(repoDir, intent);
   if (!st.similarSearched.includes(key)) st.similarSearched.push(key);
   save(sid, st);
+}
+
+/** 记下一次 similar 的参考计划。同一资源只留最新一份（AI 换了 template 再查，以后查的为准） */
+export function recordSimilarPlan(repoDir: string, plan: Omit<SimilarPlan, 'repo' | 'ts'>): void {
+  const sid = sessionId();
+  const st = load(sid);
+  const repo = repoId(repoDir);
+  st.similarPlans = st.similarPlans.filter((p) => !(p.repo === repo && p.key === plan.key));
+  st.similarPlans.push({ ...plan, repo, ts: Date.now() });
+  // 一个会话里几十个资源已经很离谱了，封顶防状态文件无限长
+  if (st.similarPlans.length > 30) st.similarPlans = st.similarPlans.slice(-30);
+  save(sid, st);
+}
+
+export function similarPlans(repoDir: string): SimilarPlan[] {
+  const repo = repoId(repoDir);
+  return load(sessionId()).similarPlans.filter((p) => p.repo === repo);
 }
 
 /**

@@ -271,10 +271,12 @@ const KNOWN_DEVIATIONS = {
     '排序不同。不阻塞交付：这是检索排序的启发式，不是行为契约。',
   'mcp-lib-search': '同 lib-search。',
   'mcp-tools-list':
-    '两处有意的差异。① impact 多了可选参数 symbol（也接受 file#symbol）：引擎的 analyzeImpact 早就支持' +
+    '几处有意的差异。① impact 多了可选参数 symbol（也接受 file#symbol）：引擎的 analyzeImpact 早就支持' +
     '方法级与字段级，只是 MCP 入参没透出来，AI 改一个 dto 字段只能拿到"整个文件波及 93 个接口"的放大结论。' +
     '② similar 的描述补上后端用法：后端仓没有页面指纹，旧描述让模型以为它只管前端页面，' +
-    '而后端走的是方法家族检索（src/insight/similar-methods.ts）。不带 symbol 时 impact 的输出与旧产物逐字节一致。',
+    '而后端走的是方法家族检索（src/insight/similar-methods.ts）。不带 symbol 时 impact 的输出与旧产物逐字节一致。' +
+    '③ similar 新增 resource / verbs / template、intent 不再必填：整句中文需求由模型拆成资源 + 动作再查，' +
+    '否则「用户管理」会漏掉本仓叫 AIMUser 的现成实现。hot 新增可选 intent（按需求找现成方法）。',
   'contracts-min1':
     '两处有意的差异。① 署名：旧产物在类型草稿头部写"由 DeerClaw 从调用点反推"，' +
     '本版改成 repo-guard —— 这是个独立插件，署一个用户机器上不存在的产品名' +

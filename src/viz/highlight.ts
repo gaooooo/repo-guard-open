@@ -17,6 +17,7 @@ import { enclosingIndex, functionIds } from '../insight/health.js';
 import { similarMethods, type Layer } from '../insight/similar-methods.js';
 import { splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
 import { resolveSymbol, reuseOf, symbolImpactOf } from '../cli/render.js';
+import { similarQueryOf, verbsArg } from '../cli/similar.js';
 
 export type Tone = 'target' | 'entry' | 'direct' | 'indirect' | 'weak' | 'ref';
 
@@ -86,7 +87,7 @@ function place(groups: PlacedGroup[]): { groups: HighlightGroup[]; pos: NonNulla
   return { groups: out, pos };
 }
 
-const LAYER_COL: Record<Layer, number> = { router: 0, service: 0, sdk: 0, logic: 1, repo: 2, dto: 3, other: 3 };
+const LAYER_COL: Record<Layer, number> = { router: 0, service: 0, sdk: 0, logic: 1, repo: 2, ext: 2, dto: 3, other: 3 };
 
 function impactHighlight(repoDir: string, graph: CodeGraph, args: Record<string, unknown>, s: (v: unknown) => string): Highlight {
   const ix = indexer(graph);
@@ -197,7 +198,8 @@ export function highlightFor(repoDir: string, graph: CodeGraph, name: string, ar
         ]);
         return { focus: p.groups[0].nodes[0] ?? null, ...p, reading: '左列照着写，右列别学' };
       }
-      const r = similarMethods(graph, { intent, limit: limitOf(3) });
+      const verbs = verbsArg(args.verbs);
+      const r = similarMethods(graph, similarQueryOf(graph, { intent, resource: s(args.resource), verbs, template: s(args.template) || undefined, limit: limitOf(3) }));
       const one = (file: string, name: string) => ix.fn(file, name).slice(0, 1);
       const pos: NonNullable<Highlight['pos']> = {};
       const edges: NonNullable<Highlight['edges']> = [];

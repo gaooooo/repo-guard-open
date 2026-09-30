@@ -135,3 +135,20 @@ Go 身份仓不该默认画类图：`AgentLogicImpl` 有方法，但大量节点
   同族成员按分层列出、给一条 接口层 → 逻辑层 → 存储层 的参考骨架、报 CRUD 缺口。
 
 **下期**：回放（会话记录 + 埋点叠到图上）、跨仓视图、平台侧体检趋势。
+
+## 11. 新功能需求：AI 自己找参考并照着写
+
+用户只说「开发资产管理，包括增删改查」，不写「参考 xx 实现」。链路：
+
+| 环节 | 位置 | 做什么 |
+|---|---|---|
+| 提示 | UserPromptSubmit（`featureHint`） | 原话同时有「开发/新增/实现」和「管理/接口/功能」时注入：拆成 resource + verbs 调 similar，方案首句写明「参考 X 实现 Y」 |
+| 参考 | similar（`resource` / `verbs` / `template`） | 已存在 → 逐动作核对并附「另起一套」候选；不存在 → 3~5 张候选卡片（业务注释、下游是本仓存储还是外部服务、目录、接口数），AI 按语义挑，选的不是第 1 个就带 `template` 重查 |
+| 守卫 | 新建门（需开 `newPageSimilar`） | 未查 similar 拦；查过但写的是别的资源（查 Asset 写 CreateWidget）也拦；带本仓前缀（CreateAIMAsset）算同一资源 |
+| 比对 | Stop（`src/insight/conform.ts`） | 本轮新写的接口是否照参考骨架分层；跳过逻辑层 / 下游不一致 / 计划里「已有」却又写了一个 → 阻止停止（每会话最多 2 次），一致则只记埋点 |
+| 证据 | `metrics.ndjson` | `feature_hint` → `similar_plan`（`new:Asset<-AIMAgents`）→ `conform_ok` / `conform_drift`，同一会话 id |
+
+会话认领：宿主拉起 MCP 时不带 `CODEBUDDY_SESSION_ID`，查询曾记在 `_nosession`、与钩子连不上（查了 impact 仍被拦）。
+现在钩子把「本仓当前会话」写进 `~/.repo-guard/state/_current/<repoId>.json`，MCP 与 CLI 拿不到环境变量时按仓认领（12 小时过期）。
+
+手动比对：`repo-guard conform`（计划取本会话 similar 记录，改动取会话记录 ∪ git 工作区）。

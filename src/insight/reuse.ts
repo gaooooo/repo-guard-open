@@ -22,91 +22,9 @@ import type { CodeGraph, FunctionNode } from '../graph/types.js';
 import { enclosingIndex, functionIds } from './health.js';
 import { analyzeSymbolImpact } from './symbol-impact.js';
 import { layerOf, splitVerb, type Layer } from './similar-methods.js';
+import { ACTIONS, ZH_WORDS } from './zh-words.js';
 
-/** 中文常用词 → 英文词根。只收研发里高频、歧义小的词；宁缺毋滥 */
-const ZH_WORDS: Array<[string, string[]]> = [
-  ['查询', ['describe', 'get', 'query', 'find', 'list', 'search']],
-  ['获取', ['get', 'describe', 'fetch', 'find']],
-  ['列表', ['list', 'describe']],
-  ['详情', ['describe', 'get', 'detail']],
-  ['创建', ['create', 'add', 'insert', 'new']],
-  ['新增', ['create', 'add', 'insert']],
-  ['添加', ['add', 'create', 'insert']],
-  ['修改', ['modify', 'update', 'set']],
-  ['更新', ['update', 'modify', 'refresh']],
-  ['删除', ['delete', 'remove']],
-  ['校验', ['validate', 'check', 'verify']],
-  ['验证', ['verify', 'validate', 'check']],
-  ['检查', ['check', 'validate']],
-  ['解析', ['parse', 'decode', 'resolve']],
-  ['格式化', ['format']],
-  ['转换', ['convert', 'to', 'transform']],
-  ['生成', ['gen', 'generate', 'build', 'new', 'make']],
-  ['加密', ['encrypt']],
-  ['解密', ['decrypt']],
-  ['签名', ['sign', 'signature']],
-  ['分页', ['page', 'paginate', 'pagination']],
-  ['排序', ['sort']],
-  ['过滤', ['filter']],
-  ['转义', ['escape']],
-  ['正则', ['regex', 'regexp']],
-  ['时间', ['time', 'date']],
-  ['日期', ['date', 'time']],
-  ['字符串', ['string', 'str']],
-  ['配置', ['config', 'conf', 'setting']],
-  ['租户', ['tenant']],
-  ['用户组', ['usergroup', 'group']],
-  ['用户', ['user']],
-  ['令牌', ['token']],
-  ['凭证', ['credential']],
-  ['凭据', ['credential']],
-  ['密钥', ['key', 'secret']],
-  ['权限', ['permission', 'auth', 'policy']],
-  ['鉴权', ['auth']],
-  ['认证', ['auth', 'authenticate']],
-  ['策略', ['policy']],
-  ['资源', ['resource']],
-  ['智能体', ['agent']],
-  ['代理', ['agent', 'proxy']],
-  ['会话', ['session']],
-  ['缓存', ['cache']],
-  ['日志', ['log']],
-  ['审计', ['audit']],
-  ['错误', ['error', 'err']],
-  ['请求', ['request', 'req']],
-  ['响应', ['response', 'resp']],
-  ['发送', ['send']],
-  ['上传', ['upload']],
-  ['下载', ['download']],
-  ['分类', ['category']],
-  ['统计', ['count', 'stat', 'statistic']],
-  ['数量', ['count']],
-  ['计数', ['count']],
-  ['用量', ['usage']],
-  ['技能', ['skill']],
-  ['服务', ['service']],
-  ['实例', ['instance']],
-  ['应用', ['app', 'application']],
-  ['连接器', ['connector']],
-  ['证书', ['certificate', 'cert']],
-  ['数据源', ['datasource']],
-  ['回调', ['callback']],
-  ['通知', ['notify', 'notification']],
-  ['链接', ['link', 'url']],
-  ['地址', ['url', 'addr', 'address']],
-];
 
-/**
- * 动作词：只说明「做什么」，不说明「对什么做」。只命中动作词的方法不算候选 ——
- * 「校验 token」只命中 validate 的会是 validateInstance，跟 token 毫无关系。
- */
-const ACTIONS = new Set([
-  'describe', 'get', 'query', 'find', 'list', 'search', 'fetch', 'detail',
-  'create', 'add', 'insert', 'new', 'modify', 'update', 'set', 'refresh', 'delete', 'remove',
-  'validate', 'check', 'verify', 'parse', 'decode', 'resolve', 'format', 'convert', 'to', 'transform',
-  'gen', 'generate', 'build', 'make', 'encrypt', 'decrypt', 'sign', 'send', 'upload', 'download',
-  'escape', 'sort', 'filter', 'count', 'stat', 'statistic', 'notify', 'authenticate',
-]);
 
 export function nameTokens(name: string): string[] {
   return name
@@ -292,7 +210,7 @@ export function findReuse(
 }
 
 const LAYER_LABEL: Record<Layer, string> = {
-  router: '路由', service: '接口层', logic: '逻辑层', repo: '存储层', sdk: 'SDK', dto: 'DTO', other: '其他',
+  router: '路由', service: '接口层', logic: '逻辑层', repo: '存储层', ext: '外部服务', sdk: 'SDK', dto: 'DTO', other: '其他',
 };
 
 export function renderReuse(r: ReuseResult, fallback: string[]): string {

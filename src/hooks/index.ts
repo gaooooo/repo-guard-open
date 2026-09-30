@@ -34,6 +34,10 @@ import { countLines, readFacts, type RepoFacts } from '../runtime/repo-facts.js'
 import { loadRedlines } from '../runtime/redlines.js';
 import { judge, denyReason, shouldBlock } from '../runtime/guard.js';
 import {
+  similarPlans,
+  sessionTouchedFiles,
+  claimStopNotice,
+  bindCurrentSession,
   hasHotQueried,
   hasLibSearched,
   hasQueried,
@@ -43,9 +47,11 @@ import {
 } from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
 import { loadGuardConfig, type GuardConfig } from '../gates/config.js';
-import { buildInjection, matchTaskRoutes } from '../gates/inject.js';
+import { buildInjection, featureHint, matchTaskRoutes } from '../gates/inject.js';
 import { judgeRedline, judgeScope, noteTouched, type WriteToolInput } from '../gates/admission.js';
 import { judgeGraphEnforce } from '../gates/graph-enforce.js';
+import { conform, renderConform } from '../insight/conform.js';
+import { getGraph } from '../runtime/graph-cache.js';
 import { judgeLoop, iterationNote, noteToolResult } from '../gates/loop.js';
 import { isDeliveryAction, judgeDelivery, noteEvidence, recordFinalSignal } from '../gates/delivery.js';
 import { loadHumanReview, redlineShouldAsk } from '../layers/human-review.js';
@@ -247,6 +253,11 @@ function userPromptSubmit(input: HookInput): void {
   if (routed) parts.push(routed);
   const std = promptSegment(standardsOf(repoDir, readFacts(repoDir)), prompt);
   if (std) parts.push(std);
+  const hint = featureHint(cfg, prompt);
+  if (hint) {
+    parts.push(hint);
+    record('feature_hint', repoDir);
+  }
 
   if (parts.length) emitContext('UserPromptSubmit', parts.join('\n\n'));
 }
@@ -318,7 +329,8 @@ function preWrite(input: HookInput): void {
   } catch {
     exists = false;
   }
-  const enforce = judgeGraphEnforce(repoDir, cfg, rel, exists);
+  const content = typeof input.tool_input?.content === 'string' ? input.tool_input.content : undefined;
+  const enforce = judgeGraphEnforce(repoDir, cfg, rel, exists, undefined, content);
   if (enforce.blocked) {
     record('graph_enforce_deny', repoDir, { file: rel, detail: enforce.kind });
     emitDeny('PreToolUse', enforce.reason!);
@@ -500,17 +512,72 @@ function postFail(input: HookInput): void {
  * 而且 `claimStopNotice` 保证同一 reason 每会话只触发一次 ——
  * 宿主没有实现 `loop_limit`，不去重就会无限续跑。
  */
-function stop(input: HookInput): void {
+/**
+ * 写后比对：本轮 similar 留下过参考计划、且本轮写过文件时才跑。
+ * 要重建图谱（新代码刚写进去，缓存必然过期），四个 gateway 仓实测 0.4~0.7 秒，在 Stop 的 15 秒预算内。
+ * 同一份结论每会话只说一次 —— 改了代码结论变了会再说。
+ */
+/** 写后比对每会话最多阻止停止几次。AI 改了还偏、或者有理由不照参考写，第三次就放它走 */
+const CONFORM_MAX_BLOCKS = 2;
+
+async function conformNote(repoDir: string): Promise<{ text: string; drift: boolean }> {
+  const none = { text: '', drift: false };
+  const plans = similarPlans(repoDir).filter((p) => p.kind !== 'exists');
+  if (!plans.length) return none;
+  const touched = sessionTouchedFiles(repoDir);
+  if (!touched.length) return none;
+  const { graph } = await getGraph(repoDir);
+  const out: string[] = [];
+  let drift = false;
+  for (const p of plans) {
+    const r = conform(graph, p, touched);
+    if (!r) continue;
+    const text = renderConform(r);
+    if (!claimStopNotice(`conform:${p.key}:${hashText(text)}`)) continue;
+    if (r.drift) drift = true;
+    const kinds = [...new Set([...r.items.map((i) => i.issue).filter(Boolean), ...(r.duplicates.length ? ['duplicate'] : [])])];
+    record(r.drift ? 'conform_drift' : 'conform_ok', repoDir, {
+      detail: `${p.resource}<-${p.template ?? ''}${kinds.length ? `:${kinds.join(',')}` : ''}`,
+    });
+    out.push(text);
+  }
+  // 拦的次数用完了就只提醒、不再阻止停止
+  if (drift && !claimConformBlock()) drift = false;
+  return { text: out.join('\n\n'), drift };
+}
+
+/** 占一个「阻止停止」的名额。名额 = conform-block:1..N，占满返回 false */
+function claimConformBlock(): boolean {
+  for (let i = 1; i <= CONFORM_MAX_BLOCKS; i++) if (claimStopNotice(`conform-block:${i}`)) return true;
+  return false;
+}
+
+function hashText(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+async function stop(input: HookInput): Promise<void> {
   const repoDir = repoOf(input);
   const cfg = loadGuardConfig(repoDir);
 
+  let conf = { text: '', drift: false };
+  try {
+    conf = await conformNote(repoDir);
+  } catch {
+    /* 比对失败不能影响收尾 */
+  }
+
   const d = judgeDelivery(cfg, repoDir);
-  if (d.block) {
-    emitContinue(d.note);
+  // 写后比对有偏差：阻止停止，让 AI 照参考改（或说明为什么不照）。只放 additionalContext 的话，
+  // 宿主在 Stop 上不会再给模型一轮，结论就只落在埋点里、代码不会变
+  if (d.block || conf.drift) {
+    emitContinue([d.block ? d.note : '', conf.text].filter(Boolean).join('\n\n'));
     return;
   }
 
-  const notes = [d.note, iterationNote(cfg)].filter(Boolean);
+  const notes = [d.note, iterationNote(cfg), conf.text].filter(Boolean);
   if (notes.length) emitContext('Stop', notes.join('\n\n'));
 }
 
@@ -525,12 +592,14 @@ function sessionEnd(input: HookInput): void {
 
 // ══════════════════ 分发 ══════════════════
 
-export function runHook(name: string): number {
+export async function runHook(name: string): Promise<number> {
   try {
     const input = readStdin();
     // 会话 id 只在 stdin 里 —— 必须在任何读写状态之前灌进去，
     // 否则 impact（MCP 进程，id 从环境变量来）记的状态和这里读的对不上
     setSessionId(input.session_id);
+    // 让 MCP 进程（拿不到会话 id）能认领到这个会话，见 session-state 的 adoptSessionFor
+    bindCurrentSession(repoOf(input));
     switch (name) {
       case 'session-start':
         sessionStart(input);
@@ -554,7 +623,7 @@ export function runHook(name: string): number {
         postCompact(input);
         break;
       case 'stop':
-        stop(input);
+        await stop(input);
         break;
       case 'session-end':
         sessionEnd(input);

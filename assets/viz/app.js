@@ -5,8 +5,8 @@
   'use strict';
 
   var MODE = window.RG_MODE || 'static';
-  var LAYERS = ['router', 'service', 'sdk', 'logic', 'repo', 'dto', 'other'];
-  var LAYER_LABEL = { router: '路由', service: '接口层', sdk: 'SDK', logic: '逻辑层', repo: '存储层', dto: 'DTO', other: '其他' };
+  var LAYERS = ['router', 'service', 'sdk', 'logic', 'repo', 'ext', 'dto', 'other'];
+  var LAYER_LABEL = { router: '路由', service: '接口层', sdk: 'SDK', logic: '逻辑层', repo: '存储层', ext: '外部服务', dto: 'DTO', other: '其他' };
   var LAYER_COLOR = { router: '#a78bfa', service: '#5eead4', sdk: '#fbbf24', logic: '#60a5fa', repo: '#fb923c', dto: '#94a3b8', other: '#64748b' };
   var TONE = { target: '#f8fafc', entry: '#f43f5e', direct: '#f59e0b', indirect: '#fde68a', weak: '#64748b', ref: '#22d3ee' };
 
@@ -343,7 +343,8 @@
     var n = nmap[state.focus] || {};
     var r = V.rels[state.focus] || {};
     if (tool === 'impact') return { file: n.file || '', symbol: n.kind === 'fn' ? n.name : '' };
-    if (tool === 'similar' || tool === 'lib_search') return { intent: n.kind === 'fn' ? n.name : '' };
+    if (tool === 'similar') return { intent: n.kind === 'fn' ? n.name : '', resource: '', verbs: '', template: '' };
+    if (tool === 'lib_search') return { intent: n.kind === 'fn' ? n.name : '' };
     if (tool === 'trace') return { urlPath: (r.routes && r.routes[0] ? r.routes[0].split(' ').slice(1).join(' ') : (V.routes[0] || {}).urlPath || '') };
     if (tool === 'check') return { files: n.file ? [n.file] : [] };
     if (tool === 'hot') return { intent: '', limit: 10 };
@@ -352,7 +353,7 @@
   function cliOf(tool, a) {
     var q = function (s) { return /^[\w./#@:-]+$/.test(s) ? s : "'" + String(s).replace(/'/g, "'\\''") + "'"; };
     if (tool === 'impact') return 'repo-guard impact ' + q(a.file + (a.symbol ? '#' + a.symbol : ''));
-    if (tool === 'similar') return 'repo-guard similar ' + q(a.intent || '');
+    if (tool === 'similar') return 'repo-guard similar ' + q(a.intent || '') + (a.resource ? ' --resource ' + q(a.resource) : '') + (a.verbs ? ' --verbs ' + q([].concat(a.verbs).join(',')) : '') + (a.template ? ' --template ' + q(a.template) : '');
     if (tool === 'trace') return 'repo-guard trace ' + q(a.urlPath || '');
     if (tool === 'hot') return 'repo-guard hot ' + (a.intent ? q(a.intent) + ' ' : '') + '--limit ' + (a.limit || 10);
     if (tool === 'check') return 'repo-guard check ' + (a.files || []).map(q).join(' ');
@@ -361,7 +362,11 @@
   }
   function argsForm(tool, a) {
     if (tool === 'impact') return "<label>file</label><input id='a_file' value='" + esc(a.file) + "'><label>symbol</label><input id='a_symbol' placeholder='方法名或字段名，可空' value='" + esc(a.symbol) + "'>";
-    if (tool === 'similar' || tool === 'lib_search') return "<label>intent</label><input id='a_intent' value='" + esc(a.intent) + "'>";
+    if (tool === 'similar') return "<label>intent</label><input id='a_intent' placeholder='原话即可，如：开发用户管理服务，包括新增、修改、删除' value='" + esc(a.intent || '') + "'>" +
+      "<label>resource</label><input id='a_resource' placeholder='后端：英文资源名，如 User（AI 拆需求后传）' value='" + esc(a.resource || '') + "'>" +
+      "<label>verbs</label><input id='a_verbs' placeholder='后端：Create,Modify,Delete' value='" + esc([].concat(a.verbs || []).join(',')) + "'>" +
+      "<label>template</label><input id='a_template' placeholder='后端：指定参考家族，可空' value='" + esc(a.template || '') + "'>";
+    if (tool === 'lib_search') return "<label>intent</label><input id='a_intent' value='" + esc(a.intent) + "'>";
     if (tool === 'trace') return "<label>urlPath</label><input id='a_urlPath' list='routes' value='" + esc(a.urlPath) + "'><datalist id='routes'>" + V.routes.slice(0, 400).map(function (r) { return "<option value='" + esc(r.urlPath) + "'>" + esc(r.method) + '</option>'; }).join('') + '</datalist>';
     if (tool === 'check') return "<label>files</label><input id='a_files' placeholder='空格分隔' value='" + esc((a.files || []).join(' ')) + "'>";
     if (tool === 'hot') return "<label>intent</label><input id='a_intent' placeholder='要写什么，可空。如：查询租户配置、转义正则' value='" + esc(a.intent || '') + "'><label>limit</label><input id='a_limit' value='" + esc(a.limit) + "'>";
@@ -370,7 +375,14 @@
   function readArgs(tool) {
     var v = function (id) { var e = $(id); return e ? e.value.trim() : ''; };
     if (tool === 'impact') { var o = { file: v('a_file') }; if (v('a_symbol')) o.symbol = v('a_symbol'); return o; }
-    if (tool === 'similar' || tool === 'lib_search') return { intent: v('a_intent') };
+    if (tool === 'similar') {
+      var sa = { intent: v('a_intent') };
+      if (v('a_resource')) sa.resource = v('a_resource');
+      if (v('a_verbs')) sa.verbs = v('a_verbs').split(/[,，\s]+/).filter(Boolean);
+      if (v('a_template')) sa.template = v('a_template');
+      return sa;
+    }
+    if (tool === 'lib_search') return { intent: v('a_intent') };
     if (tool === 'trace') return { urlPath: v('a_urlPath') };
     if (tool === 'check') return { files: v('a_files').split(/\s+/).filter(Boolean) };
     if (tool === 'hot') { var h = { limit: Number(v('a_limit')) || 10 }; if (v('a_intent')) h.intent = v('a_intent'); return h; }

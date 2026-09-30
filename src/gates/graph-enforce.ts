@@ -26,8 +26,10 @@
  * 但"**仓**里怎么写的"是仓级知识：拿 A 仓的组件库答案去放行 B 仓的新建，
  * 等于让模型照着另一个仓的约定写。所以判据带 repoDir。
  */
-import { hasHotQueried, hasLibSearched, hasSimilarSearched } from '../runtime/session-state.js';
+import {
+  similarPlans, hasHotQueried, hasLibSearched, hasSimilarSearched } from '../runtime/session-state.js';
 import { componentDocsHint, readFacts } from '../runtime/repo-facts.js';
+import { crudFamiliesInSource, sameResource } from '../insight/similar-methods.js';
 import type { GuardConfig } from './config.js';
 
 /** 路径是否命中任一模式。模式支持结尾 `**`、目录前缀、精确路径 */
@@ -46,7 +48,7 @@ function matches(patterns: string[], rel: string): boolean {
 export interface EnforceVerdict {
   blocked: boolean;
   reason?: string;
-  kind?: 'need_similar' | 'need_hot' | 'need_lib';
+  kind?: 'need_similar' | 'need_similar_resource' | 'need_hot' | 'need_lib';
 }
 
 const PASS: EnforceVerdict = { blocked: false };
@@ -54,6 +56,8 @@ const PASS: EnforceVerdict = { blocked: false };
 /** 「本轮查过没有」。缺省读会话状态；可视化沙盘传入假设值，不读也不写真实状态 */
 export interface EnforceSession {
   similarSearched: boolean;
+  /** 本轮 similar 查过的资源键。沙盘传 [] 表示不按资源判 */
+  similarKeys?: string[];
   hotQueried: boolean;
   libSearched: boolean;
 }
@@ -70,6 +74,8 @@ export function judgeGraphEnforce(
   rel: string,
   exists: boolean,
   session?: EnforceSession,
+  /** 要写入的全文（Write 的 content）。用来看写的是哪个资源 */
+  content?: string,
 ): EnforceVerdict {
   if (!cfg.gates.admission || exists) return PASS;
   const similarSearched = () => session?.similarSearched ?? hasSimilarSearched(repoDir);
@@ -91,6 +97,26 @@ export function judgeGraphEnforce(
         '先调 similar 工具（intent="要做什么"：前端如「带分页和搜索的列表页」，后端写资源名或方法名，如「AIMCredential」「DeleteAIMCredential」）。\n' +
         '平行再造一套写法的代价不在这次提交 —— 在半年后没人说得清这个仓有几种同类实现。',
     };
+  }
+
+  // 查过 similar，但查的不是现在要写的资源：写 CreateAsset 时本轮只查过 User。
+  // 只在本轮留下过后端计划时才判 —— 前端按页面指纹查，没有「资源」可对
+  if (g.newPageSimilar.enabled && matches(g.newPageSimilar.pathPatterns, rel) && content) {
+    const keys = session?.similarKeys ?? similarPlans(repoDir).flatMap((p) => p.keys);
+    if (keys.length) {
+      const unknown = [...new Map(crudFamiliesInSource(content).filter((f) => !sameResource(f.key, keys)).map((f) => [f.key, f])).values()];
+      if (unknown.length) {
+        const names = unknown.map((f) => f.name).join('、');
+        return {
+          blocked: true,
+          kind: 'need_similar_resource',
+          reason:
+            `要新建 \`${rel}\`，里面的 ${names} 属于「${unknown.map((f) => f.key).join('、')}」，但本轮 similar 查的是别的资源。\n` +
+            `先查这个资源：similar resource=<它的英文名> verbs=[…]，拿到参考家族和各层清单再写。\n` +
+            '换一个资源就换一套参考 —— 照着 A 的结论写 B，正是平行再造的开始。',
+        };
+      }
+    }
   }
 
   // 注意判据是 hasHotQueried 而不是 hasSimilarSearched —— 这两个问题不一样：

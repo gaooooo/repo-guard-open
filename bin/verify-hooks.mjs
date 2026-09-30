@@ -138,6 +138,16 @@ function mcpCall(sid, name, args) {
   });
 }
 const recordImpact = (sid, file) => mcpCall(sid, 'impact', { file });
+/** 宿主真实情况：MCP 进程拿不到会话 id（环境变量里没有） */
+function mcpCallNoSid(name, args) {
+  const env = { ...process.env, HOME };
+  delete env.CODEBUDDY_SESSION_ID;
+  delete env.CLAUDE_SESSION_ID;
+  return spawnSync(process.execPath, [TOOL, 'mcp'], {
+    input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) + '\n',
+    encoding: 'utf-8', cwd: REPO, env,
+  });
+}
 
 // ───────────── 用例 ─────────────
 
@@ -169,6 +179,15 @@ add('T1', '不误伤同名前缀目录 components-legacy', 'allow',
   hook('pre-write', { session_id: S, tool_input: { file_path: 'src/components-legacy/old.tsx' } }));
 add('T2', '仓库外路径放行', 'allow',
   hook('pre-write', { session_id: S, tool_input: { file_path: '/etc/hosts' } }));
+
+// 会话认领：真机上宿主不给 MCP 进程会话 id。不认领的话 AI 查了 impact 记在 _nosession，
+// 写前钩子读真实 id —— 查了还被拦，死循环
+const AD = 'adopt-real-sid';
+add('M1', 'MCP 无会话 id：查之前写公共层 → 拦', 'deny',
+  hook('pre-write', { session_id: AD, tool_input: { file_path: 'src/utils/helper.ts' } }));
+mcpCallNoSid('impact', { file: 'src/utils/helper.ts' });
+add('M2', 'MCP 无会话 id：认领钩子的会话，查过后放行', 'allow',
+  hook('pre-write', { session_id: AD, tool_input: { file_path: 'src/utils/helper.ts' } }));
 
 const G = 'verify-queried';
 recordImpact(G, 'src/components/Existing/index.tsx');
@@ -329,6 +348,11 @@ add('L0-8', '必读清单里含 required 文件', 'yes',
   { verdict: route.reason.includes('docs/payment.md') ? 'yes' : 'no', reason: route.reason });
 add('L0-9', '任务路由不命中 → 不注入', 'allow',
   hook('user-prompt-submit', { session_id: 'l0', prompt: '把这个按钮改成蓝色' }));
+const feat = hook('user-prompt-submit', { session_id: 'l0', prompt: '开发资产管理，包括增删改查' });
+add('L0-10', '新功能需求 → 注入「先找参考实现」', 'yes',
+  { verdict: feat.reason.includes('先找本仓的参考实现') && feat.reason.includes('参考 X 实现 Y') ? 'yes' : 'no', reason: feat.reason });
+add('L0-11', '只是改（新增一个字段）→ 不提示', 'allow',
+  hook('user-prompt-submit', { session_id: 'l0', prompt: '给订单新增一个字段' }));
 
 // ── L1 红线硬拦（结构化删除）──
 // Edit 删掉受保护标识符：before 有 2 处，after 只剩 1 处 → 必须拦

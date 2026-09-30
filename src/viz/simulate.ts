@@ -101,6 +101,8 @@ export function simulateWrite(repoDir: string, raw: string, assume: SimulateAssu
   // 与 pre-write 同序：图谱强制 → 公共层守卫 → 规范 require_tool
   const enforce = judgeGraphEnforce(repoDir, cfg, rel, exists, {
     similarSearched: assume.similarSearched,
+    // 沙盘没有真实计划，也不看写入内容：不按资源判
+    similarKeys: [],
     hotQueried: assume.hotQueried,
     libSearched: assume.libSearched,
   });

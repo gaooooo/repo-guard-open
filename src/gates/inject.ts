@@ -166,6 +166,38 @@ export function buildInjection(
  * 每次提问都多一次模型调用不划算；而且关键词写错顶多漏注入，
  * 语义判定错了会**错注入** —— 给改样式的任务塞一份支付流程必读，是纯粹的伤害。
  */
+/**
+ * 像不像「要新做一块功能」。两类词同时出现才算：动作（开发 / 新增 / 实现…）+ 对象（管理 / 接口 / 功能…）。
+ * 只有动作（「新增一个字段」）或只有对象（「管理页的按钮改蓝」）都不算 —— 那是改，不是新做。
+ */
+const FEATURE_ACT = /(开发|新增|新建|实现|做一个|做一套|加一个|加一套|增加|搭建|接入)|\b(implement|add|create|build)\b/i;
+const FEATURE_OBJ = /(管理|接口|增删改查|功能|模块|服务|页面|列表页|详情页)|\b(crud|api|endpoint|service|management|page)\b/i;
+
+export function isFeatureRequest(prompt: string): boolean {
+  const t = (prompt ?? '').trim();
+  return t.length > 0 && FEATURE_ACT.test(t) && FEATURE_OBJ.test(t);
+}
+
+/**
+ * 新功能需求的参考提示。用户只说「开发资产管理，包括增删改查」，不用再写「参考 xx 实现」——
+ * 让 AI 自己去找，并把找到的写出来给用户确认。
+ *
+ * 只提醒、不拦截：UserPromptSubmit 绝不能阻塞（见 hooks/index.ts）。
+ * 跟着 L0 注入总闸走：inject 关了就不说。
+ */
+export function featureHint(cfg: GuardConfig, prompt: string): string {
+  if (!cfg.gates.inject || !isFeatureRequest(prompt)) return '';
+  return [
+    '## 新功能需求：先找本仓的参考实现',
+    '这像是要新做一块功能。动手写代码之前：',
+    '1. 把需求拆成资源 + 动作，调 similar：resource=<英文资源名，按本仓命名风格>，verbs=<Create / Modify / Delete / Describe 里要做的>，intent=<用户原话>。前端页面直接 intent=<要做什么页面>。',
+    '2. 返回说这个资源**已存在** → 先告诉用户已有实现在哪，问是改现有的还是另起一套，不要直接平行新建。',
+    '3. **不存在** → 从返回的参考候选里挑业务最像的一个（不是第 1 个就带 template=<家族名> 再查一次），' +
+      '在方案第一句写明「参考 X 实现 Y」和理由，然后照它的分层写。',
+    '4. 写到校验、加密、分页这类小功能时，先 hot intent=<要写什么> 查有没有现成方法。',
+  ].join('\n');
+}
+
 export function matchTaskRoutes(cfg: GuardConfig, prompt: string): string {
   if (!cfg.gates.inject || !cfg.inject.taskRoutes.length) return '';
   const text = (prompt ?? '').toLowerCase();

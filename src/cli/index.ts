@@ -20,10 +20,12 @@
  *   · 报错信息也走 stderr
  *   · 只有命令本身的结果走 stdout
  */
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { renderApiContractsAsTs, type ReportContext } from '../graph/graph-report.js';
-import { renderSimilarAuto } from './similar.js';
+import { runSimilar } from './similar.js';
+import { conform, renderConform } from '../insight/conform.js';
 import { traceOrMiss } from './trace.js';
 import { auditPolicy, formatAuditReport } from '../engine/policy-audit.js';
 import { findRepoRoot, splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
@@ -32,6 +34,10 @@ import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
 import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
 import { judge, missingConfig } from '../runtime/guard.js';
 import {
+  similarPlans,
+  sessionTouchedFiles,
+  adoptSessionFor,
+  recordSimilarPlan,
   recordHotQuery,
   recordLibSearch,
   recordQueried,
@@ -70,7 +76,8 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard impact <文件>[#符号]   改它会波及哪些入口；#符号 收窄到方法或结构体字段
   repo-guard hot [要写什么] [--limit N] 有没有现成的：带需求按名字与注释找；不带返回全仓热点
   repo-guard trace <路径>          这个页面/接口打到哪里，含反推的出入参
-  repo-guard similar <要做什么>     这类页面 / 接口本仓已经怎么写了（后端按方法家族）
+  repo-guard similar <要做什么> [--resource User --verbs Create,Delete --template AIMCredentials]
+                                   这类页面 / 接口本仓有没有、怎么写的（后端按方法家族逐动作核对）
   repo-guard lib search <要什么>    UI 组件库里有没有现成的
   repo-guard contracts [接口]       反推导出接口类型草稿（必须人工 review）
   repo-guard audit                 红线体检：规则守空气没、有没有后门、证据还准不准
@@ -84,6 +91,7 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard standards audit       规范体检：有没有守空气、有没有被静默降级
   repo-guard doctor                配置体检：填完配置跑它，查 JSON 坏没坏、条目会不会静默失效
   repo-guard layers [init [--write]] 七层分类；init 铺人审/合并门禁/事实片段
+  repo-guard conform               写后比对：本轮新写的接口是否照 similar 给的参考分层写
   repo-guard viz [--out <目录>]     生成图谱体检页（静态 HTML，可离线发人）
   repo-guard viz --serve [--port N] 本地沙盘：在图上模拟插件能力，结果与 AI 调用逐字一致
   repo-guard mcp                   作为 stdio MCP 给 AI 用
@@ -122,7 +130,7 @@ export function reportContext(repoDir: string, handle: GraphHandle): ReportConte
 }
 
 /** 带值的选项。解析位置参数时要把它们的值一起跳过 */
-const VALUE_FLAGS = new Set(['--limit', '--min-call-sites', '--stack', '--port', '--out']);
+const VALUE_FLAGS = new Set(['--limit', '--min-call-sites', '--stack', '--port', '--out', '--resource', '--verbs', '--template']);
 
 function flagNumber(argv: string[], name: string, fallback: number): number {
   const i = argv.indexOf(name);
@@ -152,6 +160,13 @@ function positionals(argv: string[], from: number): string[] {
   return out;
 }
 
+/** git 工作区里改过 / 新增的文件（仓库相对路径）。拿不到就空 */
+function gitChangedFiles(repoDir: string): string[] {
+  const r = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: repoDir, encoding: 'utf-8' });
+  if (r.status !== 0) return [];
+  return r.stdout.split('\n').map((l) => l.slice(3).trim().replace(/^.* -> /, '')).filter(Boolean);
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
@@ -167,6 +182,8 @@ async function main(): Promise<number> {
   }
 
   const repoDir = findRepoRoot(process.cwd());
+  // AI 被守卫拦住时，拒绝文案给的备选之一就是跑这个 CLI。它和 MCP 一样可能拿不到会话 id
+  adoptSessionFor(repoDir);
 
   switch (cmd) {
     case 'init': {
@@ -291,14 +308,23 @@ async function main(): Promise<number> {
 
     case 'similar': {
       const intent = positionals(argv, 1).join(' ');
-      if (!intent) {
-        err('用法：repo-guard similar <要做什么>');
+      const flag = (n: string) => (argv.indexOf(n) >= 0 ? argv[argv.indexOf(n) + 1] ?? '' : '');
+      const resource = flag('--resource');
+      const verbs = flag('--verbs') ? flag('--verbs').split(/[,，\s]+/).filter(Boolean) : undefined;
+      if (!intent && !resource) {
+        err('用法：repo-guard similar <要做什么> [--resource User] [--verbs Create,Modify,Delete]');
         return 2;
       }
       const handle = await getGraph(repoDir);
-      recordSimilarSearch(repoDir, intent);
-      record('graph_query', repoDir, { detail: 'similar' });
-      outText(`\n${renderSimilarAuto(handle.graph, intent, flagNumber(argv, '--limit', 3), reportContext(repoDir, handle))}`);
+      recordSimilarSearch(repoDir, intent || resource);
+      record('graph_query', repoDir, { detail: resource ? 'similar_resource' : 'similar' });
+      const template = flag('--template') || undefined;
+      const res = runSimilar(handle.graph, { intent, resource, verbs, template, limit: flagNumber(argv, '--limit', 3) }, reportContext(repoDir, handle));
+      if (res.plan) {
+        recordSimilarPlan(repoDir, res.plan);
+        record('similar_plan', repoDir, { detail: `${res.plan.kind}:${res.plan.resource}<-${res.plan.template ?? ''}` });
+      }
+      outText(`\n${res.text}`);
       return 0;
     }
 
@@ -365,6 +391,23 @@ async function main(): Promise<number> {
       const r = runGuardInit(repoDir, argv.includes('--write'));
       outText(r.text);
       return r.exitCode;
+    }
+
+    case 'conform': {
+      // 手动跑写后比对：计划取本会话（认领到的）similar 记录，改动取会话记录 ∪ git 工作区改动
+      const plans = similarPlans(repoDir).filter((p) => p.kind !== 'exists');
+      if (!plans.length) {
+        outText('本会话没有 similar 留下的参考计划（先 similar resource=<资源> 再写代码）。');
+        return 0;
+      }
+      const touched = [...new Set([...sessionTouchedFiles(repoDir), ...gitChangedFiles(repoDir)])];
+      const handle = await getGraph(repoDir);
+      const texts = plans
+        .map((p) => conform(handle.graph, p, touched))
+        .filter((r): r is NonNullable<typeof r> => r !== null)
+        .map(renderConform);
+      outText(texts.length ? `\n${texts.join('\n\n')}` : `本轮改动里还没有 ${plans.map((p) => p.resource).join('、')} 的新接口。`);
+      return 0;
     }
 
     case 'viz': {

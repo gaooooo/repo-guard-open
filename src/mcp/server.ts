@@ -27,6 +27,8 @@ import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
 import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
 import { judge, missingConfig } from '../runtime/guard.js';
 import {
+  recordSimilarPlan,
+  adoptSessionFor,
   recordHotQuery,
   recordLibSearch,
   recordQueried,
@@ -37,7 +39,7 @@ import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
 import { renderHotMcp, renderImpactCli, renderReuseFor } from '../cli/render.js';
 import { traceOrMiss } from '../cli/trace.js';
 import { renderScanMcp, scan } from '../cli/scan.js';
-import { renderSimilarAuto } from '../cli/similar.js';
+import { runSimilar, verbsArg } from '../cli/similar.js';
 import path from 'node:path';
 
 const SERVER_NAME = 'repo-guard';
@@ -103,14 +105,17 @@ const TOOLS: ToolDef[] = [
   {
     name: 'similar',
     description:
-      '写新页面或新接口之前问：这类东西本仓已经怎么写了。前端返回同类页骨架；后端返回同一资源的方法家族（Describe/Create/Modify…）、分层骨架和家族缺口。照着写，不要平行再造一套。',
+      '写新页面或新接口之前问：这类东西本仓已经有没有、怎么写的。前端返回同类页骨架；后端返回同一资源的方法家族、按动作逐项核对（已有 / 没有）、分层骨架，本仓没有该资源时借最完整的增删改查家族当模板。' +
+      '后端调用前先把需求拆开：「开发用户管理，包括新增、修改、删除」→ resource=User，verbs=[Create, Modify, Delete]。照着写，不要平行再造一套。',
     inputSchema: {
       type: 'object',
       properties: {
-        intent: { type: 'string', description: '要做什么。前端如「带分页和搜索的列表页」；后端写资源名或方法名，如「AIMCredential」「DeleteAIMCredential」' },
+        intent: { type: 'string', description: '要做什么，原话即可。前端如「带分页和搜索的列表页」；后端也可直接写方法名，如「DeleteAIMCredential」' },
+        resource: { type: 'string', description: '后端：英文资源名，按本仓命名风格，如 User、AIMCredential；拿不准可用逗号给多个候选。不用管前缀，查 User 也会命中 AIMUser' },
+        verbs: { type: 'array', items: { type: 'string' }, description: '后端：要做的动作，Create / Modify / Delete / Describe（Add、Update、Remove、Get 等会归一）' },
+        template: { type: 'string', description: '后端：指定参考家族。上次返回的候选里第 1 个不是最像的时，填你选的家族名再查一次，拿到按它推导的新建清单' },
         limit: { type: 'number' },
       },
-      required: ['intent'],
     },
   },
   {
@@ -180,6 +185,8 @@ export async function callTool(
 ): Promise<string> {
   const repoDir = opts.repoDir ?? findRepoRoot(process.cwd());
   const live = opts.sideEffects !== false;
+  // 宿主不给 MCP 进程会话 id：按仓认领钩子记下的当前会话，否则查了也连不上写前守卫
+  if (live) adoptSessionFor(repoDir);
   const track = (event: Parameters<typeof record>[0], extra?: Parameters<typeof record>[2]) => {
     if (live) record(event, repoDir, extra);
   };
@@ -261,11 +268,20 @@ export async function callTool(
 
     case 'similar': {
       const intent = str(args.intent);
-      if (!intent) return '缺少 intent。';
+      const resource = str(args.resource);
+      const verbs = verbsArg(args.verbs);
+      if (!intent && !resource) return '缺少 intent 或 resource。';
       const handle = await getGraph(repoDir);
-      if (live) recordSimilarSearch(repoDir, intent);
-      track('graph_query', { detail: 'similar' });
-      return renderSimilarAuto(handle.graph, intent, num(args.limit, 3), ctxOf(repoDir, handle));
+      if (live) recordSimilarSearch(repoDir, intent || resource);
+      track('graph_query', { detail: resource ? 'similar_resource' : 'similar' });
+      const template = str(args.template) || undefined;
+      const out = runSimilar(handle.graph, { intent, resource, verbs, template, limit: num(args.limit, 3) }, ctxOf(repoDir, handle));
+      if (out.plan) {
+        if (live) recordSimilarPlan(repoDir, out.plan);
+        // detail 串起「查的什么 → 参考了谁」：回放与效能统计按它还原 AI 的选择
+        track('similar_plan', { detail: `${out.plan.kind}:${out.plan.resource}<-${out.plan.template ?? ''}${template ? '(指定)' : ''}` });
+      }
+      return out.text;
     }
 
     case 'lib_search': {
