@@ -41,7 +41,39 @@ function blindSpotBlock(graph: CodeGraph): string[] {
  * 盲区清单永远打印，即使影响面不为 0 —— 它防的是
  * 「影响面为 0 所以可以删」这个最危险的推理。
  */
-export function renderImpactCli(graph: CodeGraph, file: string, symbol?: string): string {
+/**
+ * 把模型给的符号归一成引擎认的名字。
+ *
+ * 真机实测：让模型查「Agent 结构体的 ID 字段」，它传的是 `symbol: "Agent.ID"` ——
+ * 这是最自然的写法，但引擎按裸名匹配，于是没命中、退回整文件 93 个入口，
+ * 正好是字段级 impact 要消灭的那个放大结论。所以 `Type.Member` 在这里拆开：
+ * 该文件里确有这个类型的这个字段 / 方法时取成员名。
+ */
+export function resolveSymbol(graph: CodeGraph, file: string, symbol?: string): string | undefined {
+  const s = (symbol ?? '').trim();
+  if (!s) return undefined;
+  const dot = s.lastIndexOf('.');
+  if (dot <= 0) return s;
+  const owner = s.slice(0, dot).split('.').pop()!;
+  const name = s.slice(dot + 1);
+  const hit =
+    (graph.fields ?? []).some((f) => f.file === file && f.struct === owner && f.name === name) ||
+    graph.functions.some((f) => f.file === file && f.owner === owner && f.name === name);
+  return hit ? name : s;
+}
+
+/** 符号没对上时给候选，让模型下一次能传对，而不是拿整文件结论交差 */
+function symbolCandidates(graph: CodeGraph, file: string, symbol: string): string[] {
+  const want = symbol.toLowerCase().split('.').pop()!;
+  const fields = (graph.fields ?? []).filter((f) => f.file === file).map((f) => `${f.struct}.${f.name}`);
+  const fns = graph.functions.filter((f) => f.file === file).map((f) => (f.owner ? `${f.owner}.${f.name}` : f.name));
+  const all = [...new Set([...fields, ...fns])];
+  const close = all.filter((x) => x.toLowerCase().includes(want));
+  return (close.length ? close : all).slice(0, 12);
+}
+
+export function renderImpactCli(graph: CodeGraph, file: string, rawSymbol?: string): string {
+  const symbol = resolveSymbol(graph, file, rawSymbol);
   const r = analyzeImpact(graph, file, symbol);
   if (r.kind === 'field') return renderFieldImpact(graph, file, symbol!, r);
   const lines: string[] = [
@@ -51,7 +83,9 @@ export function renderImpactCli(graph: CodeGraph, file: string, symbol?: string)
   ];
   if (symbol && !graph.functions.some((f) => f.file === file && f.name === symbol)) {
     // 符号没对上时必须说出来：否则"直接调用者 0 处"会被读成"没人调它"
-    lines.push(`注意：${file} 里没有叫 ${symbol} 的函数或字段，下面的直接调用者按名字过滤、可能为 0；依赖模块与入口仍按整个文件算。`);
+    lines.push(`注意：${file} 里没有叫 ${symbol} 的函数或字段，下面的直接调用者按名字过滤、可能为 0；依赖模块与入口仍按整个文件算，不是这个符号自己的影响面。`);
+    const cands = symbolCandidates(graph, file, symbol);
+    if (cands.length) lines.push(`本文件里可查的符号：${cands.join('、')}（symbol 传成员名或 类型.成员）`);
   }
   lines.push(`直接调用者   ${r.directCallers.length} 处`);
 

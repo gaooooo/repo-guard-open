@@ -58,7 +58,7 @@ const TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         file: { type: 'string', description: '仓库根相对路径，也可写成 file#symbol' },
-        symbol: { type: 'string', description: '可选：方法名或结构体字段名，如 DescribeAgent、ID' },
+        symbol: { type: 'string', description: '可选：方法名或结构体字段名，如 DescribeAgent、ID、Agent.ID' },
       },
       required: ['file'],
     },

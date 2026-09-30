@@ -10,6 +10,7 @@ import type { CodeGraph } from '../graph/types.js';
 import { enclosingIndex, functionIds } from '../insight/health.js';
 import { similarMethods } from '../insight/similar-methods.js';
 import { splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
+import { resolveSymbol } from '../cli/render.js';
 
 export interface HighlightGroup {
   label: string;
@@ -49,9 +50,10 @@ export function highlightFor(repoDir: string, graph: CodeGraph, name: string, ar
 
   switch (name) {
     case 'impact': {
-      const { file, symbol } = splitFileSymbol(s(args.file), s(args.symbol));
+      const { file, symbol: raw } = splitFileSymbol(s(args.file), s(args.symbol));
       const rel = toRepoRelative(repoDir, file);
       if (!rel) return NONE;
+      const symbol = resolveSymbol(graph, rel, raw);
       const r = analyzeImpact(graph, rel, symbol || undefined);
       let focus = `file:${rel}`;
       if (symbol && r.kind === 'field' && r.field) focus = `cls:${rel}#${r.field.struct}`;

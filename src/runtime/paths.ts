@@ -158,7 +158,7 @@ export function splitFileSymbol(raw: string, symbol?: string): { file: string; s
   const s = (raw ?? '').trim();
   const explicit = (symbol ?? '').trim();
   const at = s.lastIndexOf('#');
-  if (at > 0 && /^[A-Za-z_$][\w$]*$/.test(s.slice(at + 1))) {
+  if (at > 0 && /^[A-Za-z_$][\w$.]*$/.test(s.slice(at + 1))) {
     return { file: s.slice(0, at), symbol: explicit || s.slice(at + 1) };
   }
   return { file: s, symbol: explicit || undefined };
