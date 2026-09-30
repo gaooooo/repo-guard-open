@@ -121,6 +121,7 @@ export function createVizServer(repoDir: string, port: number): http.Server {
             similarSearched: b('similarSearched'),
             hotQueried: b('hotQueried'),
             libSearched: b('libSearched'),
+            assumeGate: body.assumeGate === 'similar' || body.assumeGate === 'hot' || body.assumeGate === 'lib_search' ? body.assumeGate : null,
           });
           return send(res, 200, JSON.stringify(r));
         }

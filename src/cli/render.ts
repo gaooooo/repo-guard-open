@@ -10,12 +10,32 @@
  * 这三个在这里另写一份终端版；`trace` / `similar` / `contracts` 直接用引擎那份
  * —— 它们的输出本身就是给人和 AI 一起看的结构化结果，没必要分叉。
  */
+import fs from 'node:fs';
+import path from 'node:path';
+
 import {
   analyzeImpact,
   hotSpots,
   STRONG_IMPACT_THRESHOLD,
   type CodeGraph,
 } from '../graph/graph-builder.js';
+import { analyzeSymbolImpact, SYMBOL_IMPACT_MAX_DEPTH, type SymbolImpactResult } from '../insight/symbol-impact.js';
+
+/** 读仓库源码（给方法级影响面补同包裸调用）。读不到返回 null，不抛 */
+export function sourceReader(graph: CodeGraph): (file: string) => string | null {
+  return (file) => {
+    try {
+      return fs.readFileSync(path.join(graph.repoDir, file), 'utf-8');
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** 方法级影响面。缓存给沙盘高亮复用，保证图上与文本是同一次计算 */
+export function symbolImpactOf(graph: CodeGraph, file: string, symbol: string): SymbolImpactResult | null {
+  return analyzeSymbolImpact(graph, file, symbol, sourceReader(graph));
+}
 
 /** 终端分隔线。固定 52 个字符宽 —— 与标题行的视觉重量匹配 */
 export const RULE = '─'.repeat(52);
@@ -76,6 +96,10 @@ export function renderImpactCli(graph: CodeGraph, file: string, rawSymbol?: stri
   const symbol = resolveSymbol(graph, file, rawSymbol);
   const r = analyzeImpact(graph, file, symbol);
   if (r.kind === 'field') return renderFieldImpact(graph, file, symbol!, r);
+  if (symbol) {
+    const s = symbolImpactOf(graph, file, symbol);
+    if (s) return renderSymbolImpact(graph, file, symbol, s, r);
+  }
   const lines: string[] = [
     '',
     `影响面 · ${file}${symbol ? `#${symbol}` : ''}`,
@@ -113,6 +137,55 @@ export function renderImpactCli(graph: CodeGraph, file: string, rawSymbol?: stri
     lines.push(`   …另有 ${r.affectedRoutes.length - 20} 个`);
   }
 
+  lines.push(...blindSpotBlock(graph));
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * 方法级影响面。受影响入口只收**调用链可达**的 handler，不再按整文件 import 传播 ——
+ * 后者在 Go 里等于「引用了同一个包」，会把不调这个方法的接口也算进来。
+ * 文件级数字只作为一行对照保留：动态派发（interface 调用）看不见，那部分可能真有关系。
+ */
+function renderSymbolImpact(
+  graph: CodeGraph,
+  file: string,
+  symbol: string,
+  s: SymbolImpactResult,
+  fileLevel: ReturnType<typeof analyzeImpact>,
+): string {
+  const direct = s.reached.filter((x) => x.depth === 1);
+  const indirect = s.reached.filter((x) => x.depth > 1);
+  const tag = (inf: boolean) => (inf ? '  [同包推断]' : '');
+  const lines: string[] = [
+    '',
+    `影响面 · ${file}#${symbol}（方法级：沿调用链反查，最多 ${SYMBOL_IMPACT_MAX_DEPTH} 层）`,
+    RULE,
+    `直接调用者   ${direct.length} 处`,
+  ];
+  for (const c of direct.slice(0, 20)) lines.push(`   ${c.fn.file}:${c.line}  ${c.fn.name}${tag(c.inferred)}`);
+  if (direct.length > 20) lines.push(`   …另有 ${direct.length - 20} 处`);
+  lines.push(`间接调用者   ${indirect.length} 个（第 2~${SYMBOL_IMPACT_MAX_DEPTH} 层）`);
+  for (const c of indirect.slice(0, 20)) lines.push(`   第${c.depth}层  ${c.fn.file}:${c.line}  ${c.fn.name} → ${c.next?.name ?? ''}${tag(c.inferred)}`);
+  if (indirect.length > 20) lines.push(`   …另有 ${indirect.length - 20} 个`);
+  lines.push(`受影响入口   ${s.routes.length} 个，其中强影响 ${s.strongRouteCount} 个（第 1~2 层可达算强）`);
+  for (const rt of s.routes.slice(0, 30)) {
+    const strong = rt.score >= STRONG_IMPACT_THRESHOLD;
+    const via = rt.chain.slice(0, -1).map((f) => f.name).join(' → ');
+    lines.push(`${strong ? '   强 ' : '      '}${String(rt.score).padEnd(6)}${rt.method} ${rt.urlPath}  ← ${via}${tag(rt.inferred)}`);
+  }
+  if (s.routes.length > 30) lines.push(`   …另有 ${s.routes.length - 30} 个`);
+  if (s.truncated) lines.push(`注意：调用链在第 ${SYMBOL_IMPACT_MAX_DEPTH} 层仍有上游，更远的入口没算进来。`);
+  if (s.inferredEdges) {
+    lines.push(`其中 ${s.inferredEdges} 条调用边来自同包裸调用的词法推断（Go 分析器不产出这类边），已标 [同包推断]。`);
+  }
+  const extra = fileLevel.affectedRoutes.length - s.routes.length;
+  if (extra > 0) {
+    lines.push(
+      '',
+      `对照：按整个文件的 import 传播共 ${fileLevel.affectedRoutes.length} 个入口，另外 ${extra} 个调用链到不了 ${symbol}，` +
+        '只是引用了同一个包。仅当经 interface 动态派发调用时才可能相关；要看文件级结论，去掉 symbol 再查。',
+    );
+  }
   lines.push(...blindSpotBlock(graph));
   return `${lines.join('\n')}\n`;
 }

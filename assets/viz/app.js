@@ -8,8 +8,7 @@
   var LAYERS = ['router', 'service', 'sdk', 'logic', 'repo', 'dto', 'other'];
   var LAYER_LABEL = { router: '路由', service: '接口层', sdk: 'SDK', logic: '逻辑层', repo: '存储层', dto: 'DTO', other: '其他' };
   var LAYER_COLOR = { router: '#a78bfa', service: '#5eead4', sdk: '#fbbf24', logic: '#60a5fa', repo: '#fb923c', dto: '#94a3b8', other: '#64748b' };
-  var TONE = { target: '#f8fafc', strong: '#f59e0b', warn: '#f43f5e', weak: '#64748b', ref: '#22d3ee' };
-  var TONE_LABEL = { target: '目标', strong: '强相关', warn: '需回归', weak: '弱相关', ref: '参考' };
+  var TONE = { target: '#f8fafc', entry: '#f43f5e', direct: '#f59e0b', indirect: '#fde68a', weak: '#64748b', ref: '#22d3ee' };
 
   var V, H; // view payload, health report
   var nmap = {}, fnMetric = {}, fileMetric = {}, linksBy = { call: [], import: [], owns: [] };
@@ -154,6 +153,7 @@
   function edgeStyle(rel) {
     if (rel === 'owns') return { color: '#334155', opacity: 0.25, width: 1, curveness: 0 };
     if (rel === 'import') return { color: '#64748b', opacity: 0.18, width: 1, type: 'dashed', curveness: 0.15 };
+    if (rel === 'inferred') return { color: '#fbbf24', opacity: 0.7, width: 1.3, type: 'dashed', curveness: 0.12 };
     return { color: '#67e8f9', opacity: 0.55, width: 1.3, curveness: 0.2 };
   }
   function draw(nodes, links, opts) {
@@ -172,7 +172,7 @@
       });
     });
     var ls = links.filter(function (l) { return ids[l.source] && ids[l.target]; }).map(function (l) {
-      return { source: l.source, target: l.target, rel: l.rel, lineStyle: edgeStyle(l.rel), symbol: l.rel === 'call' ? ['none', 'arrow'] : ['none', 'none'], symbolSize: 7 };
+      return { source: l.source, target: l.target, rel: l.rel, lineStyle: edgeStyle(l.rel), symbol: l.rel === 'call' || l.rel === 'inferred' ? ['none', 'arrow'] : ['none', 'none'], symbolSize: 7 };
     });
     chart.setOption({
       backgroundColor: '#0b1117', animation: false,
@@ -186,7 +186,7 @@
     }, true);
   }
   function tooltip(x) {
-    if (x.dataType === 'edge') return esc(({ call: '调用', import: 'import', owns: '包含' })[x.data.rel] || x.data.rel) + '<br>' + esc(short(x.data.source)) + ' → ' + esc(short(x.data.target));
+    if (x.dataType === 'edge') return esc(({ call: '调用', inferred: '调用（同包词法推断）', import: 'import', owns: '包含' })[x.data.rel] || x.data.rel) + '<br>' + esc(short(x.data.source)) + ' → ' + esc(short(x.data.target));
     var n = x.data || {};
     if (n.kind === 'col') return esc(n.name);
     var lines = [esc(n.kind === 'file' ? n.file : n.file + '#' + n.name), esc(LAYER_LABEL[n.layer] || '')];
@@ -241,18 +241,27 @@
   }
   function showHighlight(h) {
     state.highlight = h; state.view = 'ego'; syncButtons();
-    var tone = {}, depth = {};
-    var order = ['weak', 'ref', 'strong', 'warn', 'target'];
-    h.groups.slice().sort(function (a, b) { return order.indexOf(a.tone) - order.indexOf(b.tone); }).forEach(function (g) {
-      g.nodes.slice(0, 160).forEach(function (id) { if (nmap[id]) tone[id] = g.tone; });
-    });
-    Object.keys(tone).forEach(function (id) {
-      var n = nmap[id], li = LAYERS.indexOf(n.layer);
-      depth[id] = li < 0 ? LAYERS.length : li;
-    });
-    // 目标按自己的分层落列：调用方（接口层）在左、它在右，箭头方向与调用方向一致
-    if (h.focus && nmap[h.focus]) { state.focus = h.focus; tone[h.focus] = 'target'; var fl = LAYERS.indexOf(nmap[h.focus].layer); depth[h.focus] = fl < 0 ? LAYERS.length : fl; }
-    draw(layoutDepth(depth), V.links, { tone: tone, labelAll: Object.keys(tone).length < 80 });
+    var tone = {};
+    h.groups.forEach(function (g) { g.nodes.forEach(function (id) { if (nmap[id] && !tone[id]) tone[id] = g.tone; }); });
+    if (h.focus && nmap[h.focus]) state.focus = h.focus;
+    var nodes;
+    if (h.pos) {
+      // 按关系摆：服务端给了列与行，每列垂直居中
+      var colSize = {};
+      Object.keys(h.pos).forEach(function (id) { var c = h.pos[id].col; colSize[c] = Math.max(colSize[c] || 0, h.pos[id].row + 1); });
+      nodes = Object.keys(h.pos).filter(function (id) { return nmap[id]; }).map(function (id) {
+        var p = h.pos[id];
+        return Object.assign({}, nmap[id], { x: p.col * 320, y: (p.row - (colSize[p.col] - 1) / 2) * 34, fixed: true });
+      });
+    } else {
+      var depth = {};
+      Object.keys(tone).forEach(function (id) { var li = LAYERS.indexOf(nmap[id].layer); depth[id] = li < 0 ? LAYERS.length : li; });
+      nodes = layoutDepth(depth);
+    }
+    var links = h.edges
+      ? h.edges.map(function (e) { return { source: e.source, target: e.target, rel: e.inferred ? 'inferred' : 'call' }; })
+      : V.links.filter(function (l) { return l.rel !== 'owns'; });
+    draw(nodes, links, { tone: tone, labelAll: nodes.length < 90 });
   }
   function render() {
     if (state.view === 'files') showFiles();
@@ -378,37 +387,76 @@
       "<h3>1 · 调工具</h3><div class='form'><label>工具</label><select id='sbTool'>" + TOOLS.map(function (t) { return '<option' + (t === tool ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select>' + argsForm(tool, a) + '</div>' +
       "<div class='actions'><button type='button' class='primary' id='runTool'" + (off ? ' disabled' : '') + '>调用</button></div>' +
       "<p class='muted small'>MCP：<code>mcp__repo-guard__" + esc(tool) + ' ' + esc(JSON.stringify(a)) + '</code><br>CLI：<code>' + esc(cliOf(tool, a)) + '</code></p>' +
-      "<h3>2 · 模拟 AI 改写这个文件</h3><div class='form'><label>file</label><input id='sw_file' value='" + esc(n ? n.file : '') + "' placeholder='仓库相对路径，可填不存在的新文件'></div>" +
-      "<div class='checks'><label><input type='checkbox' id='sw_q'>本轮已查 impact</label><label><input type='checkbox' id='sw_s'>已查 similar</label><label><input type='checkbox' id='sw_h'>已查 hot</label><label><input type='checkbox' id='sw_l'>已查 lib_search</label></div>" +
-      "<div class='actions'><button type='button' id='runSim'" + (off ? ' disabled' : '') + '>判定这次写入</button></div>' +
+      simPanel(n, off) +
       "<div id='sbOut'>" + (state.sbOut || '') + '</div>';
     return html;
   }
+  // 模拟写入的假设状态。跨重绘保留；调工具成功后自动勾上对应项 —— 这就是 AI 的真实流程：
+  // 被拦 → 去查 → 再写被放行。只存在页面内存里，不写真实会话状态
+  var sw = { file: '', q: false, s: false, h: false, l: false, gate: '' };
+  function simPanel(n, off) {
+    if (!sw.file && n) sw.file = n.file;
+    var ck = function (id, v, label) { return "<label><input type='checkbox' id='" + id + "'" + (v ? ' checked' : '') + '>' + label + '</label>'; };
+    var gateOpt = function (v, label) { return "<option value='" + v + "'" + (sw.gate === v ? ' selected' : '') + '>' + label + '</option>'; };
+    return "<h3>2 · 模拟 AI 改写一个文件</h3>" +
+      "<div class='form'><label>file</label><input id='sw_file' value='" + esc(sw.file) + "' placeholder='仓库相对路径，可填不存在的新文件'>" +
+      "<label>假设开门</label><select id='sw_gate'>" + gateOpt('', '不假设（按本仓真实配置）') + gateOpt('similar', '这个目录：新建前先查 similar') + gateOpt('hot', '这个目录：新建前先查 hot') + gateOpt('lib_search', '这个目录：新建前先查 lib_search') + '</select></div>' +
+      "<p class='muted small'>本轮 AI 已经查过（假设）：</p>" +
+      "<div class='checks'>" + ck('sw_q', sw.q, 'impact') + ck('sw_s', sw.s, 'similar') + ck('sw_h', sw.h, 'hot') + ck('sw_l', sw.l, 'lib_search') + '</div>' +
+      "<p class='muted small'>在上面「调工具」成功调用后会自动勾上对应项。impact 只管改<b>已存在</b>的公共层文件；similar / hot / lib_search 只管<b>新建</b>文件，且这几道门默认关，要选「假设开门」才看得到效果。</p>" +
+      "<div class='actions'><button type='button' id='runSim'" + (off ? ' disabled' : '') + ">判定这次写入</button><button type='button' id='resetSim'>清空假设</button></div>" +
+      "<details class='small muted'><summary>演示：新建接口前必须先查 similar</summary><ol>" +
+      '<li>file 填一个不存在的新文件，如 <code>service/admin/new_api.go</code></li>' +
+      '<li>假设开门选「新建前先查 similar」，点判定 → <b>拦截</b>，并显示 AI 会收到的拒绝文案</li>' +
+      '<li>在「调工具」里选 similar，intent 填 <code>AIMCredential</code>，点调用 → 自动勾上 similar</li>' +
+      '<li>再点判定 → <b>放行</b></li></ol></details>';
+  }
+  function readSim() {
+    var v = function (id) { var e = $(id); return e ? e : null; };
+    if (v('sw_file')) sw.file = v('sw_file').value.trim();
+    if (v('sw_gate')) sw.gate = v('sw_gate').value;
+    ['q', 's', 'h', 'l'].forEach(function (k) { var e = v('sw_' + k); if (e) sw[k] = e.checked; });
+  }
+  var AUTO_TICK = { impact: 'q', similar: 's', hot: 'h', lib_search: 'l' };
   function post(url, body) {
     return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
       return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; });
     });
   }
   function highlightHtml(h) {
-    if (!h || !h.groups.length) return "<p class='muted small'>这个工具没有可落到图上的结构化结果。</p>";
-    return '<ul>' + h.groups.map(function (g, i) {
-      return "<li class='link' data-group='" + i + "'><span class='tone' style='background:" + TONE[g.tone] + "'></span>" + esc(g.label) + ' · ' + g.nodes.length + '</li>';
-    }).join('') + "</ul><p class='muted small'>颜色：" + Object.keys(TONE_LABEL).map(function (k) { return "<span class='tone' style='background:" + TONE[k] + "'></span>" + TONE_LABEL[k]; }).join(' ') + '</p>';
+    if (!h || !h.groups.length) return "<p class='muted small'>这个工具没有可落到图上的结构化结果，看下面的原文。</p>";
+    var total = h.groups.reduce(function (n, g) { return n + g.nodes.length; }, 0);
+    return (h.reading ? "<p class='small'><b>怎么读：</b>" + esc(h.reading) + '</p>' : '') +
+      "<ul class='groups'>" + h.groups.map(function (g, i) {
+        return "<li class='link' data-group='" + i + "'><span class='tone' style='background:" + TONE[g.tone] + "'></span><b>" + esc(g.label) + '</b> · ' + g.nodes.length +
+          "<div class='muted small'>" + esc(g.desc || '') + '</div></li>';
+      }).join('') + '</ul>' +
+      "<p class='muted small'>各组互斥，图上共 " + total + " 个点。点某一组只看这一组；点「全部」恢复。<span class='link' id='allGroups'>全部</span></p>" +
+      (h.notes && h.notes.length ? "<div class='note'>" + h.notes.map(esc).join('<br>') + '</div>' : '');
   }
   function runTool() {
     var tool = state.sbTool || 'impact', args = readArgs(tool);
+    readSim();
     state.sbArgs = { tool: tool, args: args };
     state.sbOut = "<p class='muted'>调用中…</p>"; renderSide();
     post('/api/tool', { name: tool, args: args }).then(function (r) {
       state.lastTool = r;
-      state.sbOut = '<h3>图上高亮</h3>' + highlightHtml(r.highlight) + '<h3>AI 看到的原文</h3><pre></pre>';
+      var tick = AUTO_TICK[tool];
+      // impact 按文件记：只有查的正是模拟写入的那个文件才算查过（与守卫口径一致）
+      if (tick && (tool !== 'impact' || !sw.file || (args.file || '').split('#')[0] === sw.file)) {
+        if (tool === 'impact' && !sw.file) sw.file = (args.file || '').split('#')[0];
+        sw[tick] = true;
+      }
+      state.sbOut = (tick ? "<p class='muted small'>已在「模拟改写」里勾上「" + tool + "」（沙盘假设，未写入真实会话）。</p>" : '') +
+        '<h3>图上高亮</h3>' + highlightHtml(r.highlight) + '<h3>AI 看到的原文</h3><pre></pre>';
       renderSide();
       side.querySelector('#sbOut pre').textContent = r.text;
       if (r.highlight && r.highlight.groups.length) showHighlight(r.highlight);
     }).catch(function (e) { state.sbOut = "<div class='note bad'>" + esc(e.message) + '</div>'; renderSide(); });
   }
   function runSim() {
-    var body = { file: $('sw_file').value.trim(), queried: $('sw_q').checked, similarSearched: $('sw_s').checked, hotQueried: $('sw_h').checked, libSearched: $('sw_l').checked };
+    readSim();
+    var body = { file: sw.file, queried: sw.q, similarSearched: sw.s, hotQueried: sw.h, libSearched: sw.l, assumeGate: sw.gate || null };
     post('/api/simulate-write', body).then(function (r) {
       state.sbOut = "<h3>判定</h3><p class='verdict " + r.verdict + "'>" + (r.verdict === 'deny' ? '拦截' : '放行') + ' · ' + esc(r.rel || body.file) + (r.exists ? '' : '（新建）') + '</p>' +
         '<ul>' + r.steps.map(function (s) { return '<li>' + esc(s.gate) + ' — ' + esc(s.verdict) + (s.note ? ' · ' + esc(s.note) : '') + '</li>'; }).join('') + '</ul>' +
@@ -417,7 +465,7 @@
         "<p class='muted small'>未模拟：" + r.notSimulated.map(esc).join('；') + '</p>';
       renderSide();
       if (r.reason) side.querySelector('#sbOut pre').textContent = r.reason;
-      if (r.rel && nmap['file:' + r.rel]) showHighlight({ focus: 'file:' + r.rel, groups: [{ label: '写入目标', tone: r.verdict === 'deny' ? 'warn' : 'target', nodes: ['file:' + r.rel] }] });
+      if (r.rel && nmap['file:' + r.rel]) showHighlight({ focus: 'file:' + r.rel, groups: [{ label: '写入目标', tone: r.verdict === 'deny' ? 'entry' : 'target', desc: '', nodes: ['file:' + r.rel] }] });
     }).catch(function (e) { state.sbOut = "<div class='note bad'>" + esc(e.message) + '</div>'; renderSide(); });
   }
 
@@ -442,22 +490,31 @@
         var c = H.lists.cycles[Number(li.getAttribute('data-cycle'))] || [];
         var depth = {}; c.slice(0, -1).forEach(function (f, i) { depth['file:' + f] = i; });
         state.view = 'ego'; syncButtons();
-        var tone = {}; Object.keys(depth).forEach(function (k) { tone[k] = 'warn'; });
+        var tone = {}; Object.keys(depth).forEach(function (k) { tone[k] = 'entry'; });
         draw(layoutDepth(depth), linksBy.import, { tone: tone, labelAll: true });
       };
     });
     side.querySelectorAll('li[data-group]').forEach(function (li) {
       li.onclick = function () {
-        var g = state.lastTool.highlight.groups[Number(li.getAttribute('data-group'))];
-        showHighlight({ focus: g.nodes[0] || null, groups: [g] });
+        var h = state.lastTool.highlight, g = h.groups[Number(li.getAttribute('data-group'))];
+        var keep = {}; g.nodes.forEach(function (id) { keep[id] = 1; });
+        if (h.focus) keep[h.focus] = 1;
+        var pos = null;
+        if (h.pos) { pos = {}; Object.keys(h.pos).forEach(function (id) { if (keep[id]) pos[id] = h.pos[id]; }); }
+        var tg = h.groups.filter(function (x) { return x.tone === 'target'; })[0];
+        showHighlight({ focus: h.focus, groups: tg && tg !== g ? [tg, g] : [g], pos: pos,
+          edges: h.edges ? h.edges.filter(function (e) { return keep[e.source] && keep[e.target]; }) : undefined });
       };
     });
+    if ((b = $('allGroups'))) b.onclick = function () { showHighlight(state.lastTool.highlight); };
     var b;
     if ((b = $('back'))) b.onclick = function () { state.focus = null; state.view = 'files'; syncButtons(); render(); };
     if ((b = $('expand'))) b.onclick = function () { var f = nmap[state.focus].file; state.expanded[f] = !state.expanded[f]; state.view = 'files'; syncButtons(); render(); };
-    if ((b = $('sbTool'))) b.onchange = function () { state.sbTool = b.value; state.sbArgs = null; renderSide(); };
+    if ((b = $('sbTool'))) b.onchange = function (e) { readSim(); state.sbTool = e.target.value; state.sbArgs = null; renderSide(); };
     if ((b = $('runTool'))) b.onclick = runTool;
     if ((b = $('runSim'))) b.onclick = runSim;
+    if ((b = $('resetSim'))) b.onclick = function () { sw = { file: '', q: false, s: false, h: false, l: false, gate: '' }; state.sbOut = ''; renderSide(); };
+    ['sw_file', 'sw_gate', 'sw_q', 'sw_s', 'sw_h', 'sw_l'].forEach(function (id) { var e = $(id); if (e) e.onchange = readSim; });
   }
 
   // ─────────────── 检索 ───────────────

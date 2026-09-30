@@ -172,6 +172,14 @@ async function main() {
       ok(sim.verdict === (hookReason ? 'deny' : 'allow'), `写入模拟判定与真实 pre-write 一致（${sim.verdict}）`);
       ok((sim.reason ?? null) === hookReason, '写入模拟的拒绝文案与真实 hook 逐字一致');
 
+      // 假设开门：新文件 + 未查 similar → 拦；查过 → 放。且不写任何配置文件
+      const newFile = name === 'web' ? 'src/views/NewPage/index.tsx' : 'internal/service/new_api.go';
+      const cfgBefore = hashDir(path.join(repo, '.codebuddy'));
+      const g1 = JSON.parse((await request(srv.port, { method: 'POST', pathname: '/api/simulate-write', body: { file: newFile, assumeGate: 'similar' } })).text);
+      const g2 = JSON.parse((await request(srv.port, { method: 'POST', pathname: '/api/simulate-write', body: { file: newFile, assumeGate: 'similar', similarSearched: true } })).text);
+      ok(g1.verdict === 'deny' && /similar/.test(g1.reason ?? '') && g2.verdict === 'allow', `假设开门：未查 similar 拦、查过放（${g1.verdict} → ${g2.verdict}）`);
+      ok(hashDir(path.join(repo, '.codebuddy')) === cfgBefore, '假设开门不改仓库配置');
+
       const evil = await request(srv.port, { pathname: '/api/view', host: `evil.example:${srv.port}` });
       ok(evil.status === 403, `非 localhost Host 被拒（${evil.status}）`);
       const bad = await request(srv.port, { method: 'POST', pathname: '/api/tool', body: { name: 'exec', args: {} } });

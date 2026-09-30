@@ -88,7 +88,7 @@ export function judgeGraphEnforce(
       kind: 'need_similar',
       reason:
         `要新建 \`${rel}\`，但本轮还没查过仓里同类实现。\n` +
-        '先调 similar 工具（intent="要做什么"：前端如「带分页和搜索的列表页」，后端如「带租户校验的查询接口」）。\n' +
+        '先调 similar 工具（intent="要做什么"：前端如「带分页和搜索的列表页」，后端写资源名或方法名，如「AIMCredential」「DeleteAIMCredential」）。\n' +
         '平行再造一套写法的代价不在这次提交 —— 在半年后没人说得清这个仓有几种同类实现。',
     };
   }

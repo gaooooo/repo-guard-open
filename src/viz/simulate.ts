@@ -28,6 +28,13 @@ export interface SimulateAssume {
   similarSearched: boolean;
   hotQueried: boolean;
   libSearched: boolean;
+  /**
+   * 假设这个目录开了「新建前先查 X」这道门。
+   * 这三道门默认关（process-gates.json 的 admission 与各自 enabled 都要开），
+   * 不假设的话在大多数仓里勾不勾「已查 similar」结果都一样，演示不出来。
+   * 只改沙盘里这一次判定用的配置副本，不写任何文件。
+   */
+  assumeGate?: 'similar' | 'hot' | 'lib_search' | null;
 }
 
 export interface SimulateStep {
@@ -77,7 +84,16 @@ export function simulateWrite(repoDir: string, raw: string, assume: SimulateAssu
     exists = false;
   }
   const facts = readFacts(repoDir);
-  const cfg = loadGuardConfig(repoDir);
+  const cfg = structuredClone(loadGuardConfig(repoDir));
+  let assumedNote = '';
+  if (assume.assumeGate) {
+    const dir = rel.includes('/') ? `${rel.slice(0, rel.lastIndexOf('/'))}/` : rel;
+    const key = { similar: 'newPageSimilar', hot: 'newComponentHot', lib_search: 'newComponentLibSearch' }[assume.assumeGate] as
+      'newPageSimilar' | 'newComponentHot' | 'newComponentLibSearch';
+    cfg.gates.admission = true;
+    cfg.graphEnforce[key] = { enabled: true, pathPatterns: [dir] };
+    assumedNote = `（沙盘假设：在 ${dir} 开启「新建前先查 ${assume.assumeGate}」，未改任何配置文件）`;
+  }
   const snapshot = loadRedlines(repoDir);
   const rules = activeRules(snapshot).filter((r) => ruleAppliesToPath(r, rel));
   const out: SimulateResult = { ...base, exists, redlines: rules.map((r) => ({ id: r.id, rule: r.rule })) };
@@ -89,13 +105,13 @@ export function simulateWrite(repoDir: string, raw: string, assume: SimulateAssu
     libSearched: assume.libSearched,
   });
   if (enforce.blocked) {
-    out.steps.push({ gate: '图谱强制（新建前先查）', verdict: 'deny', note: enforce.kind ?? '' });
+    out.steps.push({ gate: '图谱强制（新建前先查）', verdict: 'deny', note: `${enforce.kind ?? ''}${assumedNote}` });
     return { ...out, verdict: 'deny', reason: enforce.reason ?? null };
   }
   out.steps.push({
     gate: '图谱强制（新建前先查）',
     verdict: 'pass',
-    note: exists ? '文件已存在，这道门只管新建' : cfg.gates.admission ? '已查过或路径不在规则里' : '准入总闸未开（process-gates admission=false）',
+    note: (exists ? '文件已存在，这道门只管新建' : cfg.gates.admission ? '已查过或路径不在规则里' : '准入总闸未开（process-gates admission=false）') + assumedNote,
   });
 
   if (facts) {
