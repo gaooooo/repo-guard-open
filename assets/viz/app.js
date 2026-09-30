@@ -251,7 +251,8 @@
       Object.keys(h.pos).forEach(function (id) { var c = h.pos[id].col; colSize[c] = Math.max(colSize[c] || 0, h.pos[id].row + 1); });
       nodes = Object.keys(h.pos).filter(function (id) { return nmap[id]; }).map(function (id) {
         var p = h.pos[id];
-        return Object.assign({}, nmap[id], { x: p.col * 320, y: (p.row - (colSize[p.col] - 1) / 2) * 34, fixed: true });
+        var y = h.align === 'rows' ? p.row * 48 : (p.row - (colSize[p.col] - 1) / 2) * 34;
+        return Object.assign({}, nmap[id], { x: p.col * 320, y: y, fixed: true });
       });
     } else {
       var depth = {};

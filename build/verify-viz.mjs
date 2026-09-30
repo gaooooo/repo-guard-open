@@ -115,7 +115,78 @@ function startServer(cwd, env, port) {
   });
 }
 
+/**
+ * similar 后端分支的单元用例：直接喂合成图谱给 src/insight/similar-methods.ts。
+ * 端到端 fixture 里没有完整的三层 CRUD，拿不到模板兜底这条路。
+ */
+async function similarUnit() {
+  console.log('\n── similar（后端方法家族）──');
+  const out = path.join(os.tmpdir(), `rg-similar-${process.pid}.mjs`);
+  const esbuild = path.join(ROOT, 'node_modules', '.bin', 'esbuild');
+  const b = spawnSync(esbuild, [path.join(ROOT, 'src/insight/similar-methods.ts'), '--bundle', '--format=esm', '--platform=node', `--outfile=${out}`, '--log-level=warning']);
+  if (b.status !== 0) {
+    ok(false, `打包 similar-methods 失败：${b.stderr}`);
+    return;
+  }
+  const m = await import(out);
+  fs.rmSync(out, { force: true });
+  const fns = [];
+  const calls = [];
+  const fn = (file, name, line) => {
+    fns.push({ file, name, line, endLine: line + 8, exported: true, owner: null });
+    return { file, name, line };
+  };
+  const call = (from, to, dl = 2) => calls.push({ fromFile: from.file, fromFn: from.name, toFile: to.file, toMethod: to.name, line: from.line + dl, kind: 'call', tier: 'extracted' });
+  // 模板家族 AIMAgents：四个动作，每个动作先查存在再做本动作（验证同动作优先）
+  const repoFind = fn('internal/repo/agent.go', 'Find', 10);
+  const repoOne = fn('internal/repo/agent.go', 'FindOne', 20);
+  const repoIns = fn('internal/repo/agent.go', 'Insert', 30);
+  const repoUpd = fn('internal/repo/agent.go', 'Update', 40);
+  const repoDel = fn('internal/repo/agent.go', 'Delete', 50);
+  const lDescs = fn('internal/logic/agent.go', 'DescribeAgents', 10); call(lDescs, repoFind);
+  const lDesc = fn('internal/logic/agent.go', 'DescribeAgent', 20); call(lDesc, repoOne);
+  const lCre = fn('internal/logic/agent.go', 'CreateAgent', 30); call(lCre, repoIns);
+  const lMod = fn('internal/logic/agent.go', 'ModifyAgent', 40); call(lMod, repoUpd);
+  const lDel = fn('internal/logic/agent.go', 'DeleteAgent', 50); call(lDel, repoDel);
+  const sDescs = fn('service/admin/agent.go', 'DescribeAIMAgents', 10); call(sDescs, lDescs);
+  const sCre = fn('service/admin/agent.go', 'CreateAIMAgent', 30); call(sCre, lCre);
+  const sMod = fn('service/admin/agent.go', 'ModifyAIMAgent', 40); call(sMod, lDesc, 1); call(sMod, lMod, 3);
+  const sDel = fn('service/admin/agent.go', 'DeleteAIMAgent', 50); call(sDel, lDesc, 1); call(sDel, lDel, 3);
+  // 缺 Create 的家族：逻辑层已经有 CreateTokenUsage
+  const tFind = fn('internal/repo/token_usage.go', 'Find', 10);
+  fn('internal/repo/token_usage.go', 'Insert', 20);
+  const tlDescs = fn('internal/logic/token_usage.go', 'DescribeTokenUsages', 10); call(tlDescs, tFind);
+  fn('internal/logic/token_usage.go', 'CreateTokenUsage', 20);
+  const tsDescs = fn('service/admin/token_usage.go', 'DescribeAIMTokenUsages', 10); call(tsDescs, tlDescs);
+  fn('service/admin/token_usage.go', 'DeleteAIMTokenUsage', 20);
+  fn('service/admin/token_usage.go', 'ModifyAIMTokenUsage', 30);
+  // 复数：Categories 与 Category 必须同族
+  fn('service/category.go', 'DescribeCategories', 10);
+  fn('service/category.go', 'CreateCategory', 20);
+  const modules = [...new Set(fns.map((f) => f.file))].map((file) => ({ file, imports: [], importedBy: [], symbolCount: 0 }));
+  const graph = { ok: true, repoDir: '/x', modules, classes: [], functions: fns, calls, routes: [], stats: {}, warnings: [], builtAt: 0 };
+
+  const t = m.similarMethods(graph, { intent: 'CreateAIMWorkload' });
+  const txt = m.renderSimilarMethods(t, 'x');
+  ok(t.matchedBy === 'template' && t.template?.family.family === 'AIMAgents', `新资源走模板兜底（${t.matchedBy} / ${t.template?.family.family}）`);
+  const mod = t.template?.chains.find((c) => c.verb === 'Modify');
+  ok(mod?.chain.map((c) => c.name).join('>') === 'ModifyAIMAgent>ModifyAgent>Update', `Modify 骨架取同动作下游（${mod?.chain.map((c) => c.name).join('>')}）`);
+  ok(/service\/admin\/workload\.go`：DescribeAIMWorkloads、CreateAIMWorkload/.test(txt) && /internal\/repo\/workload\.go`：Find/.test(txt), '照模板推导出新资源的方法与文件');
+
+  const g = m.similarMethods(graph, { intent: 'CreateAIMTokenUsage' });
+  const planned = g.verbTemplate?.chain.planned ?? [];
+  ok(g.matchedBy === 'family' && g.verbTemplate?.family === 'AIMAgents', '缺动作时从别的家族借同一动作');
+  ok(planned.map((p) => `${p.name}:${p.reuse ? '有' : '新'}`).join(' ') === 'CreateAIMTokenUsage:新 CreateTokenUsage:有 Insert:有', `标出下层已有的方法（${planned.map((p) => `${p.name}:${p.reuse ? '有' : '新'}`).join(' ')}）`);
+
+  const c = m.similarMethods(graph, { intent: 'Category' });
+  ok(c.families[0]?.members.length === 2, `Categories 与 Category 同族（${c.families[0]?.members.length}）`);
+
+  const u = m.similarMethods(graph, { intent: 'EscapeRegex' });
+  ok(!u.template && /hot/.test(u.unmatchedReason ?? ''), '工具函数不给 CRUD 模板，改提示用 hot');
+}
+
 async function main() {
+  await similarUnit();
   if (!fs.existsSync(TOOL)) {
     console.error(`找不到产物：${TOOL}`);
     process.exit(2);

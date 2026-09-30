@@ -35,6 +35,8 @@ export interface Highlight {
   pos?: Record<string, { col: number; row: number }>;
   /** 要画的边。给了就只画这些（含图谱里没有的推断边）；不给则前端画节点之间已有的边 */
   edges?: Array<{ source: string; target: string; inferred?: boolean }>;
+  /** rows = 各列按行号对齐（表格式，similar 用）；缺省 = 每列各自垂直居中（影响面用） */
+  align?: 'rows';
   /** 图怎么读 */
   reading?: string;
   /** 口径提醒 */
@@ -196,29 +198,89 @@ export function highlightFor(repoDir: string, graph: CodeGraph, name: string, ar
         return { focus: p.groups[0].nodes[0] ?? null, ...p, reading: '左列照着写，右列别学' };
       }
       const r = similarMethods(graph, { intent, limit: limitOf(3) });
-      const chainIds = uniq(r.families.flatMap((f) => (f.reference?.chain ?? []).flatMap((c) => ix.fn(c.file, c.name).slice(0, 1))));
+      const one = (file: string, name: string) => ix.fn(file, name).slice(0, 1);
+      const pos: NonNullable<Highlight['pos']> = {};
+      const edges: NonNullable<Highlight['edges']> = [];
+      /** 一条链画成一行：从左到右 接口层 → 逻辑层 → 存储层 */
+      const row = (chain: Array<{ file: string; name: string }>, r0: number): string[] => {
+        const ids = chain.flatMap((c) => one(c.file, c.name));
+        ids.forEach((id, i) => {
+          if (!pos[id]) pos[id] = { col: i, row: r0 };
+          if (i) edges.push({ source: ids[i - 1], target: id });
+        });
+        return ids;
+      };
+
+      // ── 新资源：模板家族每个动作一行 ──
+      if (r.template) {
+        const t = r.template;
+        const ids = uniq(t.chains.flatMap((c, i) => row(c.chain, i)));
+        return {
+          focus: ids[0] ?? null,
+          groups: [
+            {
+              label: `模板骨架（${t.family.family}）`,
+              tone: 'target',
+              desc: `本仓没有 ${r.wantResource}，借四个动作齐全的 ${t.family.family} 当模板。每行一个动作：接口层 → 逻辑层 → 存储层`,
+              nodes: ids,
+            },
+          ],
+          pos,
+          edges,
+          align: 'rows',
+          reading: '每一行是模板的一个动作（Describe / Create / Modify / Delete），从左到右是调用方向',
+          notes: [
+            `这些是别的资源（${t.family.family}）的方法：只抄分层写法，不抄业务逻辑。`,
+            `新建 ${r.wantResource} 的方法与文件清单见下方原文「照模板新建」。`,
+            ...(t.alternatives.length ? [`可换的模板：${t.alternatives.join('、')}`] : []),
+          ],
+        };
+      }
+
+      // ── 已有资源：第 0 行参考骨架；缺动作时第 1 行是借来的同动作骨架；其余按分层列出 ──
+      const chainIds = uniq(r.families.flatMap((f) => (f.reference ? row(f.reference.chain, 0) : [])));
+      const groups: HighlightGroup[] = [
+        { label: '参考分层骨架', tone: 'target', desc: '同族里调用链最完整的一条：接口层 → 逻辑层 → 存储层。新写的接口照这条分层', nodes: chainIds },
+      ];
+      const notes = r.families.flatMap((f) => (f.missingVerbs.length ? [`家族 ${f.family} 缺 ${f.missingVerbs.join('、')}`] : []));
+      if (r.verbTemplate) {
+        const v = r.verbTemplate;
+        const vt = uniq(row(v.chain.chain, 1));
+        groups.push({ label: `${v.chain.verb} 的写法（借 ${v.family}）`, tone: 'ref', desc: `本族没有 ${v.chain.verb}，同一动作在别的家族里这么写`, nodes: vt });
+        const reuse = uniq(v.chain.planned.filter((p) => p.reuse).flatMap((p) => one(p.file, p.name)));
+        reuse.forEach((id) => {
+          const p = v.chain.planned.find((x) => one(x.file, x.name)[0] === id)!;
+          const col = v.chain.planned.indexOf(p);
+          if (!pos[id]) pos[id] = { col, row: 2 };
+        });
+        if (reuse.length) {
+          groups.push({ label: '已有，直接调用', tone: 'direct', desc: `补 ${v.chain.verb}${r.wantResource} 时这些下层方法本仓已经有了，接口层直接调，不要重写`, nodes: reuse });
+        }
+        const fresh = v.chain.planned.filter((p) => !p.reuse).map((p) => `${p.file}#${p.name}`);
+        if (fresh.length) notes.push(`要新建的只有：${fresh.join('、')}`);
+      }
       const layerById = new Map<string, Layer>();
       for (const f of r.families) for (const m of f.members) for (const id of ix.fn(m.file, m.name)) layerById.set(id, m.layer);
-      const rest = uniq(r.families.flatMap((f) => f.members.flatMap((m) => ix.fn(m.file, m.name)))).filter((id) => !chainIds.includes(id));
-      const pos: NonNullable<Highlight['pos']> = {};
-      chainIds.forEach((id, i) => (pos[id] = { col: i, row: 0 }));
+      const taken = new Set(Object.keys(pos));
+      const rest = uniq(r.families.flatMap((f) => f.members.flatMap((m) => ix.fn(m.file, m.name)))).filter((id) => !taken.has(id));
       const rows = new Map<number, number>();
       for (const id of rest) {
         const col = LAYER_COL[layerById.get(id) ?? 'other'];
-        const row = (rows.get(col) ?? 1) + 1;
-        rows.set(col, row);
-        pos[id] = { col, row };
+        const rr = (rows.get(col) ?? 2) + 1;
+        rows.set(col, rr);
+        pos[id] = { col, row: rr };
       }
+      groups.push({ label: '同族其他方法', tone: 'weak', desc: '去掉动词前缀后资源名相同的方法，按分层排列。按命名归族，不是语义搜索', nodes: rest });
       return {
         focus: chainIds[0] ?? rest[0] ?? null,
-        groups: [
-          { label: '参考分层骨架', tone: 'target', desc: '同族里调用链最完整的一条：接口层 → 逻辑层 → 存储层。新写的接口照这条分层', nodes: chainIds },
-          { label: '同族方法', tone: 'ref', desc: '去掉动词前缀后资源名相同的方法（Describe/Create/Modify…）。按命名归族，不是语义搜索', nodes: rest },
-        ],
+        groups,
         pos,
-        edges: chainIds.slice(1).map((id, i) => ({ source: chainIds[i], target: id })),
-        reading: '第一行是参考骨架（从左到右调用）；下面按分层列出同族其他方法',
-        notes: r.families.flatMap((f) => (f.missingVerbs.length ? [`家族 ${f.family} 缺 ${f.missingVerbs.join('、')}`] : [])),
+        edges,
+        align: 'rows',
+        reading: r.verbTemplate
+          ? '第 1 行：本族参考骨架；第 2 行：借来的同一动作骨架；第 3 行：补这个动作时已有、可直接调用的下层方法'
+          : '第 1 行是参考骨架（从左到右调用）；下面按分层列出同族其他方法',
+        notes,
       };
     }
 
