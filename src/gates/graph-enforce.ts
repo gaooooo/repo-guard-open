@@ -53,6 +53,10 @@ export interface EnforceVerdict {
 
 const PASS: EnforceVerdict = { blocked: false };
 
+function isTestFile(rel: string): boolean {
+  return /(_test\.go|\.(test|spec)\.[cm]?[jt]sx?)$/.test(rel) || /(^|\/)(__tests__|__mocks__)\//.test(rel);
+}
+
 /** 「本轮查过没有」。缺省读会话状态；可视化沙盘传入假设值，不读也不写真实状态 */
 export interface EnforceSession {
   similarSearched: boolean;
@@ -78,6 +82,8 @@ export function judgeGraphEnforce(
   content?: string,
 ): EnforceVerdict {
   if (!cfg.gates.admission || exists) return PASS;
+  // 测试文件没有「同类实现 / 可复用组件」可查：新建 asset_test.go 前要求 similar 只会让 AI 空查一次
+  if (isTestFile(rel)) return PASS;
   const similarSearched = () => session?.similarSearched ?? hasSimilarSearched(repoDir);
   const hotQueried = () => session?.hotQueried ?? hasHotQueried(repoDir);
   const libSearched = () => session?.libSearched ?? hasLibSearched(repoDir);

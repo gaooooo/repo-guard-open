@@ -278,11 +278,71 @@ function load(sid: string): SessionState {
   };
 }
 
+/**
+ * 读 → 改 → 写，整段在锁里。
+ *
+ * ── 为什么必须加锁 ──
+ * 同一个会话的状态文件会被好几个进程同时改：MCP 进程记「查过 similar」、写前钩子记「改过这个文件」、
+ * 写后钩子记循环门计数 —— 宿主是并行拉起它们的。之前各自「读整份 → 改一处 → 写整份」，
+ * 后写的会把先写的整份覆盖掉。真机实测：AI 查了两次 similar（第二次带 template 定了参考），
+ * 最后状态里一条都没留下，写后比对拿不到计划，新建门也把它当成没查过。
+ *
+ * 锁用 mkdir（原子、跨平台、不依赖三方库）。拿不到锁最多等 2 秒；锁超过 5 秒没释放按残留清掉
+ *（持锁进程被杀）。实在拿不到就不加锁照做 —— 与修之前一样，不能因为锁让钩子卡死。
+ */
+function update<T>(fn: (st: SessionState) => T): T {
+  const sid = sessionId();
+  const f = stateFile(sid);
+  const lock = `${f}.lock`;
+  let locked = false;
+  try {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      try {
+        fs.mkdirSync(lock);
+        locked = true;
+        break;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') break;
+        try {
+          if (Date.now() - fs.statSync(lock).mtimeMs > 5000) fs.rmdirSync(lock);
+        } catch {
+          /* 别的进程刚释放 */
+        }
+        if (Date.now() > deadline) break;
+        Atomics.wait(SLEEPER, 0, 0, 5);
+      }
+    }
+  } catch {
+    /* 状态目录建不出来：下面 save 也会静默失败 */
+  }
+  try {
+    const st = load(sid);
+    const out = fn(st);
+    save(sid, st);
+    return out;
+  } finally {
+    if (locked) {
+      try {
+        fs.rmdirSync(lock);
+      } catch {
+        /* 已被当作残留清掉 */
+      }
+    }
+  }
+}
+
+const SLEEPER = new Int32Array(new SharedArrayBuffer(4));
+
 function save(sid: string, st: SessionState): void {
   try {
     const f = stateFile(sid);
     fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, JSON.stringify({ ...st, version: STATE_VERSION, updatedAt: Date.now() }));
+    // 先写临时文件再改名：别的进程读到的要么是旧的整份、要么是新的整份，不会读到半截
+    const tmp = `${f}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ...st, version: STATE_VERSION, updatedAt: Date.now() }));
+    fs.renameSync(tmp, f);
   } catch {
     // 写不进去就算了。后果是守卫更严（同一个文件要反复查），
     // 这个方向的失败是安全的 —— 比放行错的好。
@@ -292,10 +352,9 @@ function save(sid: string, st: SessionState): void {
 /** 记下"查过这个文件的影响面" */
 export function recordQueried(repoDir: string, rel: string): void {
   if (!rel) return;
-  const sid = sessionId();
-  const st = load(sid);
-  st.queried[scopedKey(repoDir, rel)] = Date.now();
-  save(sid, st);
+  update((st) => {
+    st.queried[scopedKey(repoDir, rel)] = Date.now();
+  });
 }
 
 /** 这个文件在本会话查过影响面吗 */
@@ -306,32 +365,29 @@ export function hasQueried(repoDir: string, rel: string): boolean {
 
 /** 记下"查过组件库目录" */
 export function recordLibSearch(repoDir: string, intent: string): void {
-  const sid = sessionId();
-  const st = load(sid);
   const key = scopedKey(repoDir, intent);
-  if (!st.libSearched.includes(key)) st.libSearched.push(key);
-  save(sid, st);
+  update((st) => {
+    if (!st.libSearched.includes(key)) st.libSearched.push(key);
+  });
 }
 
 /** 记下"查过同类页骨架" */
 export function recordSimilarSearch(repoDir: string, intent: string): void {
-  const sid = sessionId();
-  const st = load(sid);
   const key = scopedKey(repoDir, intent);
-  if (!st.similarSearched.includes(key)) st.similarSearched.push(key);
-  save(sid, st);
+  update((st) => {
+    if (!st.similarSearched.includes(key)) st.similarSearched.push(key);
+  });
 }
 
 /** 记下一次 similar 的参考计划。同一资源只留最新一份（AI 换了 template 再查，以后查的为准） */
 export function recordSimilarPlan(repoDir: string, plan: Omit<SimilarPlan, 'repo' | 'ts'>): void {
-  const sid = sessionId();
-  const st = load(sid);
   const repo = repoId(repoDir);
-  st.similarPlans = st.similarPlans.filter((p) => !(p.repo === repo && p.key === plan.key));
-  st.similarPlans.push({ ...plan, repo, ts: Date.now() });
-  // 一个会话里几十个资源已经很离谱了，封顶防状态文件无限长
-  if (st.similarPlans.length > 30) st.similarPlans = st.similarPlans.slice(-30);
-  save(sid, st);
+  update((st) => {
+    st.similarPlans = st.similarPlans.filter((p) => !(p.repo === repo && p.key === plan.key));
+    st.similarPlans.push({ ...plan, repo, ts: Date.now() });
+    // 一个会话里几十个资源已经很离谱了，封顶防状态文件无限长
+    if (st.similarPlans.length > 30) st.similarPlans = st.similarPlans.slice(-30);
+  });
 }
 
 export function similarPlans(repoDir: string): SimilarPlan[] {
@@ -368,12 +424,10 @@ export function hasHotQueried(repoDir: string): boolean {
 }
 
 export function recordHotQuery(repoDir: string): void {
-  const sid = sessionId();
-  const st = load(sid);
   const id = repoId(repoDir);
-  if (st.hotRepos.includes(id)) return;
-  st.hotRepos.push(id);
-  save(sid, st);
+  update((st) => {
+    if (!st.hotRepos.includes(id)) st.hotRepos.push(id);
+  });
 }
 
 // ══════════════════ L1 范围门：会话内改过哪些文件 ══════════════════
@@ -405,12 +459,10 @@ export function countSessionFiles(): number {
 
 export function recordSessionFile(repoDir: string, rel: string): void {
   if (!rel) return;
-  const sid = sessionId();
-  const st = load(sid);
   const key = scopedKey(repoDir, rel);
-  if (st.touchedFiles.includes(key)) return;
-  st.touchedFiles.push(key);
-  save(sid, st);
+  update((st) => {
+    if (!st.touchedFiles.includes(key)) st.touchedFiles.push(key);
+  });
 }
 
 // ══════════════════ L3 循环门：三个计数器 ══════════════════
@@ -426,13 +478,12 @@ export function recordSessionFile(repoDir: string, rel: string): void {
  * "反复在同一个相对路径上打转"本身就是卡住的信号，这个方向偏严，是安全的。
  */
 export function bumpRepeat(toolName: string, fingerprint: string): number {
-  const sid = sessionId();
-  const st = load(sid);
   const key = `${toolName}|${fingerprint.slice(0, 120)}`;
-  st.repeatCount[key] = (st.repeatCount[key] ?? 0) + 1;
-  st.toolCalls += 1;
-  save(sid, st);
-  return st.repeatCount[key];
+  return update((st) => {
+    st.repeatCount[key] = (st.repeatCount[key] ?? 0) + 1;
+    st.toolCalls += 1;
+    return st.repeatCount[key];
+  });
 }
 
 export function repeatCountOf(toolName: string, fingerprint: string): number {
@@ -441,20 +492,19 @@ export function repeatCountOf(toolName: string, fingerprint: string): number {
 
 /** 工具失败：连续失败数 +1，返回新值 */
 export function bumpConsecutiveFail(): number {
-  const sid = sessionId();
-  const st = load(sid);
-  st.consecutiveFail += 1;
-  save(sid, st);
-  return st.consecutiveFail;
+  return update((st) => {
+    st.consecutiveFail += 1;
+    return st.consecutiveFail;
+  });
 }
 
 /** 工具成功：连续失败数清零。**这一步不能漏** —— 漏了就成了"累计失败数" */
 export function clearConsecutiveFail(): void {
-  const sid = sessionId();
-  const st = load(sid);
-  if (st.consecutiveFail === 0) return;
-  st.consecutiveFail = 0;
-  save(sid, st);
+  // 绝大多数调用都是成功且计数本来就是 0：先无锁看一眼，省掉一次加锁写盘
+  if (load(sessionId()).consecutiveFail === 0) return;
+  update((st) => {
+    st.consecutiveFail = 0;
+  });
 }
 
 export function consecutiveFailCount(): number {
@@ -463,12 +513,11 @@ export function consecutiveFailCount(): number {
 
 /** 同一个文件写失败：+1 并返回新值 */
 export function bumpFileWriteFail(repoDir: string, rel: string): number {
-  const sid = sessionId();
-  const st = load(sid);
   const key = scopedKey(repoDir, rel);
-  st.fileWriteFail[key] = (st.fileWriteFail[key] ?? 0) + 1;
-  save(sid, st);
-  return st.fileWriteFail[key];
+  return update((st) => {
+    st.fileWriteFail[key] = (st.fileWriteFail[key] ?? 0) + 1;
+    return st.fileWriteFail[key];
+  });
 }
 
 export function fileWriteFailCount(repoDir: string, rel: string): number {
@@ -482,11 +531,9 @@ export function toolCallCount(): number {
 // ══════════════════ L5 交付门：工程校验证据 ══════════════════
 
 export function recordEvidence(kind: string): void {
-  const sid = sessionId();
-  const st = load(sid);
-  if (st.evidence.includes(kind)) return;
-  st.evidence.push(kind);
-  save(sid, st);
+  update((st) => {
+    if (!st.evidence.includes(kind)) st.evidence.push(kind);
+  });
 }
 
 export function evidenceList(): string[] {
@@ -504,12 +551,11 @@ export function evidenceList(): string[] {
  * 模型会反复触发同一个校验，无限续跑。
  */
 export function claimStopNotice(reason: string): boolean {
-  const sid = sessionId();
-  const st = load(sid);
-  if (st.stopNotices.includes(reason)) return false;
-  st.stopNotices.push(reason);
-  save(sid, st);
-  return true;
+  return update((st) => {
+    if (st.stopNotices.includes(reason)) return false;
+    st.stopNotices.push(reason);
+    return true;
+  });
 }
 
 /**

@@ -361,6 +361,36 @@ async function flowE2E(sandbox) {
   ok(ev('similar_plan').some((m) => m.sid === SID && /new:Asset<-AIMAgents/.test(m.detail)), '⑨ 埋点：similar_plan 记在真实会话下，含「查的什么 ← 参考了谁」');
   ok(ev('conform_drift').some((m) => m.sid === SID && /skip_logic/.test(m.detail)), '⑩ 埋点：conform_drift 记下偏差种类');
   ok(ev('feature_hint').some((m) => m.sid === SID), '⑪ 埋点：feature_hint');
+
+  // ⑫ 并发：宿主会同时拉起多个钩子 + MCP 进程改同一份会话状态。之前「读整份 → 写整份」互相覆盖，
+  // 真机上两次 similar 的记录全丢了。这里 12 个写前钩子 + 2 个 MCP similar 同时跑，一条都不能丢
+  const RACE = 'race-sid';
+  hook('user-prompt-submit', { session_id: RACE, prompt: 'x' });
+  const run = (args, input, env) =>
+    new Promise((resolve) => {
+      const c = spawn(process.execPath, [TOOL, ...args], { cwd: repo, env });
+      c.stdout.on('data', () => {});
+      c.on('close', resolve);
+      c.stdin.end(input);
+    });
+  const mcpFrames = (res) =>
+    [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'similar', arguments: { resource: res } } },
+    ].map((x) => JSON.stringify(x)).join('\n') + '\n';
+  const N = 12;
+  await Promise.all([
+    ...Array.from({ length: N }, (_, i) =>
+      run(['hook', 'pre-write'], JSON.stringify({ cwd: repo, session_id: RACE, tool_name: 'Write', tool_input: { file_path: `internal/x/f${i}.go`, content: '' } }), envHook),
+    ),
+    run(['mcp'], mcpFrames('Gadget'), { ...envHook, CODEBUDDY_SESSION_ID: RACE }),
+    run(['mcp'], mcpFrames('Widget'), { ...envHook, CODEBUDDY_SESSION_ID: RACE }),
+  ]);
+  const st = JSON.parse(fs.readFileSync(path.join(home, '.repo-guard', 'state', `${RACE}.json`), 'utf-8'));
+  const touchedN = st.touchedFiles.filter((k) => /internal\/x\/f\d+\.go$/.test(k)).length;
+  const planKeys = st.similarPlans.map((p) => p.key).sort().join(',');
+  ok(touchedN === N && planKeys === 'gadget,widget', `⑫ 并发写同一会话状态不丢（改动 ${touchedN}/${N}，计划 ${planKeys}）`);
+  ok(!fs.readdirSync(path.join(home, '.repo-guard', 'state')).some((n) => n.endsWith('.lock') || n.endsWith('.tmp')), '⑫+ 没有残留的锁与临时文件');
 }
 
 async function main() {

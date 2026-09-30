@@ -82,18 +82,6 @@
 
     "PostToolUse": [
       {
-        "_": "写完体检：超行数上限提醒。提醒里点明『按本仓已有的拆法拆』—— 不加这句模型会自己发明一套目录结构。",
-        "matcher": "Write|Edit|MultiEdit|write_to_file|replace_in_file|edit_file|multi_replace",
-        "hooks": [
-          {
-            "type": "command",
-            "description": "超长文件提醒",
-            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-write",
-            "timeout": 5
-          }
-        ]
-      },
-      {
         "_": "L3 循环门计数：记 (工具名, 入参指纹) 的重复次数与连续成功。指纹只取路径/命令，不含内容——含内容的话模型改一个字就成了新调用，计数永远到不了阈值。计数**不受开关控制**：关着时也要能回答「如果开了会拦多少次」。",
         "matcher": "Write|Edit|MultiEdit|NotebookEdit|write_to_file|replace_in_file|edit_file|multi_replace",
         "hooks": [
