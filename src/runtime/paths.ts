@@ -151,6 +151,20 @@ export function toRepoRelative(repoDir: string, raw: string): string | null {
 }
 
 /**
+ * 拆 `file#symbol`。symbol 显式给出时优先；否则只在 `#` 后面是标识符时才拆，
+ * 避免把文件名里本来就带 `#` 的路径拆坏。
+ */
+export function splitFileSymbol(raw: string, symbol?: string): { file: string; symbol?: string } {
+  const s = (raw ?? '').trim();
+  const explicit = (symbol ?? '').trim();
+  const at = s.lastIndexOf('#');
+  if (at > 0 && /^[A-Za-z_$][\w$]*$/.test(s.slice(at + 1))) {
+    return { file: s.slice(0, at), symbol: explicit || s.slice(at + 1) };
+  }
+  return { file: s, symbol: explicit || undefined };
+}
+
+/**
  * 解析符号链接，但**容忍路径还不存在**。
  *
  * ── 为什么必须容忍 ──

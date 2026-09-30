@@ -43,12 +43,17 @@ function blindSpotBlock(graph: CodeGraph): string[] {
  */
 export function renderImpactCli(graph: CodeGraph, file: string, symbol?: string): string {
   const r = analyzeImpact(graph, file, symbol);
+  if (r.kind === 'field') return renderFieldImpact(graph, file, symbol!, r);
   const lines: string[] = [
     '',
     `影响面 · ${file}${symbol ? `#${symbol}` : ''}`,
     RULE,
-    `直接调用者   ${r.directCallers.length} 处`,
   ];
+  if (symbol && !graph.functions.some((f) => f.file === file && f.name === symbol)) {
+    // 符号没对上时必须说出来：否则"直接调用者 0 处"会被读成"没人调它"
+    lines.push(`注意：${file} 里没有叫 ${symbol} 的函数或字段，下面的直接调用者按名字过滤、可能为 0；依赖模块与入口仍按整个文件算。`);
+  }
+  lines.push(`直接调用者   ${r.directCallers.length} 处`);
 
   for (const c of r.directCallers.slice(0, 20)) {
     lines.push(`   ${c.file}:${c.line}  ${c.fn}`);
@@ -74,6 +79,46 @@ export function renderImpactCli(graph: CodeGraph, file: string, symbol?: string)
     lines.push(`   …另有 ${r.affectedRoutes.length - 20} 个`);
   }
 
+  lines.push(...blindSpotBlock(graph));
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * 字段级影响面。不打印"受影响入口"—— 字段查询不走模块 BFS，
+ * 那个数字恒为 0，印出来会被读成"改这个字段不影响任何接口"。
+ */
+function renderFieldImpact(
+  graph: CodeGraph,
+  file: string,
+  symbol: string,
+  r: ReturnType<typeof analyzeImpact>,
+): string {
+  const f = r.field!;
+  const tags = Object.entries(f.tags ?? {}).map(([k, v]) => `${k}:"${v}"`).join(' ');
+  const lines: string[] = [
+    '',
+    `影响面 · ${file}#${symbol}（字段 ${f.struct}.${f.name}${f.typeName ? ` : ${f.typeName}` : ''}${tags ? `  ${tags}` : ''}）`,
+    RULE,
+    `点访问读写   ${r.directCallers.length} 处`,
+  ];
+  for (const c of r.directCallers.slice(0, 20)) lines.push(`   ${c.file}:${c.line}  ${c.fn}`);
+  if (r.directCallers.length > 20) lines.push(`   …另有 ${r.directCallers.length - 20} 处`);
+  const all = (r.literalHits ?? []).filter((l) => !(l.file === file && l.line === f.line));
+  // 字符串键（filter["_id"] 这类）才是真实读写点；别的结构体声明了同名 tag
+  // 只说明"名字撞了"，列出来会把 ID 这种通用字段刷成上百行噪音
+  const declLines = new Set((graph.fields ?? []).map((x) => `${x.file}:${x.line}`));
+  const isDecl = (l: { file: string; line: number; via: string }) => l.via === 'tag' || declLines.has(`${l.file}:${l.line}`);
+  const lits = all.filter((l) => !isDecl(l));
+  const sameTag = all.filter(isDecl);
+  lines.push(`字符串键     ${lits.length} 处（按 tag 值匹配，词法命中，未经类型确认）`);
+  for (const l of lits.slice(0, 20)) lines.push(`   ${l.file}:${l.line}  "${l.value}"`);
+  if (lits.length > 20) lines.push(`   …另有 ${lits.length - 20} 处`);
+  if (sameTag.length) {
+    const files = new Set(sameTag.map((l) => l.file));
+    lines.push(`同名 tag     ${sameTag.length} 处，分布在 ${files.size} 个文件（别的结构体用了同一个 tag 值，名字相撞不等于同一字段）`);
+  }
+  lines.push(`涉及文件     ${r.dependentModules.length} 个`);
+  for (const w of r.warnings ?? []) lines.push('', `提醒：${w}`);
   lines.push(...blindSpotBlock(graph));
   return `${lines.join('\n')}\n`;
 }

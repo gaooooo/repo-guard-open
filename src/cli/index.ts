@@ -22,10 +22,11 @@
  */
 import path from 'node:path';
 
-import { renderApiContractsAsTs, renderSimilar, type ReportContext } from '../graph/graph-report.js';
+import { renderApiContractsAsTs, type ReportContext } from '../graph/graph-report.js';
+import { renderSimilarAuto } from './similar.js';
 import { traceOrMiss } from './trace.js';
 import { auditPolicy, formatAuditReport } from '../engine/policy-audit.js';
-import { findRepoRoot, toRepoRelative } from '../runtime/paths.js';
+import { findRepoRoot, splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
 import { readFacts, DEFAULT_LINE_LIMIT, componentDocsHint } from '../runtime/repo-facts.js';
 import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
 import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
@@ -56,6 +57,8 @@ import { runDoctor } from './doctor.js';
 import { runRedlinesInit } from './redlines.js';
 import { runLayersInit } from './layers-init.js';
 import { runBootstrap } from './bootstrap.js';
+import { writeStaticViz } from '../viz/index.js';
+import { serveViz } from '../viz/server.js';
 import { loadStandards } from '../standards/loader.js';
 
 const HELP = `
@@ -64,10 +67,10 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard init [--write] [--all] 体检；--write 写 repo-facts；--all 一次铺齐全部控制文件
   repo-guard scan [--json]         体量与结构体检（超长文件、循环依赖）
   repo-guard check <文件…>          改动自查：碰没碰公共层和红线，有问题非零退出
-  repo-guard impact <文件>          改它会波及哪些入口
+  repo-guard impact <文件>[#符号]   改它会波及哪些入口；#符号 收窄到方法或结构体字段
   repo-guard hot [--limit N]       高扇入热点，写新组件前看有没有现成的
   repo-guard trace <路径>          这个页面/接口打到哪里，含反推的出入参
-  repo-guard similar <要做什么>     这类页面本仓已经怎么写了
+  repo-guard similar <要做什么>     这类页面 / 接口本仓已经怎么写了（后端按方法家族）
   repo-guard lib search <要什么>    UI 组件库里有没有现成的
   repo-guard contracts [接口]       反推导出接口类型草稿（必须人工 review）
   repo-guard audit                 红线体检：规则守空气没、有没有后门、证据还准不准
@@ -81,6 +84,8 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard standards audit       规范体检：有没有守空气、有没有被静默降级
   repo-guard doctor                配置体检：填完配置跑它，查 JSON 坏没坏、条目会不会静默失效
   repo-guard layers [init [--write]] 七层分类；init 铺人审/合并门禁/事实片段
+  repo-guard viz [--out <目录>]     生成图谱体检页（静态 HTML，可离线发人）
+  repo-guard viz --serve [--port N] 本地沙盘：在图上模拟插件能力，结果与 AI 调用逐字一致
   repo-guard mcp                   作为 stdio MCP 给 AI 用
   repo-guard hook <name>           插件钩子（由宿主调用）
 `;
@@ -117,7 +122,7 @@ export function reportContext(repoDir: string, handle: GraphHandle): ReportConte
 }
 
 /** 带值的选项。解析位置参数时要把它们的值一起跳过 */
-const VALUE_FLAGS = new Set(['--limit', '--min-call-sites', '--stack']);
+const VALUE_FLAGS = new Set(['--limit', '--min-call-sites', '--stack', '--port', '--out']);
 
 function flagNumber(argv: string[], name: string, fallback: number): number {
   const i = argv.indexOf(name);
@@ -243,18 +248,19 @@ async function main(): Promise<number> {
     case 'impact': {
       const raw = argv[1];
       if (!raw) {
-        err('用法：repo-guard impact <文件>');
+        err('用法：repo-guard impact <文件>[#符号]');
         return 2;
       }
-      const rel = toRepoRelative(repoDir, raw);
+      const { file: rawFile, symbol } = splitFileSymbol(raw);
+      const rel = toRepoRelative(repoDir, rawFile);
       if (!rel) {
         err('路径不在仓库里');
         return 2;
       }
       const handle = await getGraph(repoDir);
       recordQueried(repoDir, rel);
-      record('graph_query', repoDir, { file: rel, detail: 'impact' });
-      outText(renderImpactCli(handle.graph, rel));
+      record('graph_query', repoDir, { file: rel, detail: symbol ? 'impact_symbol' : 'impact' });
+      outText(renderImpactCli(handle.graph, rel, symbol));
       return 0;
     }
 
@@ -287,7 +293,7 @@ async function main(): Promise<number> {
       const handle = await getGraph(repoDir);
       recordSimilarSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'similar' });
-      outText(`\n${renderSimilar(handle.graph, { intent, limit: flagNumber(argv, "--limit", 3) }, reportContext(repoDir, handle))}`);
+      outText(`\n${renderSimilarAuto(handle.graph, intent, flagNumber(argv, '--limit', 3), reportContext(repoDir, handle))}`);
       return 0;
     }
 
@@ -354,6 +360,16 @@ async function main(): Promise<number> {
       const r = runGuardInit(repoDir, argv.includes('--write'));
       outText(r.text);
       return r.exitCode;
+    }
+
+    case 'viz': {
+      if (argv.includes('--serve')) {
+        return serveViz(repoDir, flagNumber(argv, '--port', 7788), (s) => out(`${s}\n`));
+      }
+      const i = argv.indexOf('--out');
+      const r = await writeStaticViz(repoDir, i >= 0 ? argv[i + 1] : undefined);
+      outText(r.text);
+      return 0;
     }
 
     case 'governance': {

@@ -19,15 +19,9 @@
  * prompts、sampling，但这个 server 只提供工具，声明多余的能力只会让宿主
  * 去调然后拿到错误。
  */
-import fs from 'node:fs';
-
-import {
-  renderApiContractsAsTs,
-  renderSimilar,
-  type ReportContext,
-} from '../graph/graph-report.js';
+import { renderApiContractsAsTs, type ReportContext } from '../graph/graph-report.js';
 import { auditPolicy, formatAuditReport } from '../engine/policy-audit.js';
-import { findRepoRoot, toRepoRelative } from '../runtime/paths.js';
+import { findRepoRoot, splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
 import { DEFAULT_LINE_LIMIT, readFacts, componentDocsHint } from '../runtime/repo-facts.js';
 import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
 import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
@@ -43,6 +37,7 @@ import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
 import { renderHotMcp, renderImpactCli } from '../cli/render.js';
 import { traceOrMiss } from '../cli/trace.js';
 import { renderScanMcp, scan } from '../cli/scan.js';
+import { renderSimilarAuto } from '../cli/similar.js';
 import path from 'node:path';
 
 const SERVER_NAME = 'repo-guard';
@@ -58,10 +53,13 @@ const TOOLS: ToolDef[] = [
   {
     name: 'impact',
     description:
-      '改一个已有文件之前问：改它会波及哪些页面和接口。返回直接调用者、依赖模块、受影响入口（带强弱分数）和图谱盲区。影响面为 0 不等于可以删。',
+      '改一个已有文件之前问：改它会波及哪些页面和接口。返回直接调用者、依赖模块、受影响入口（带强弱分数）和图谱盲区。只改某个方法或结构体字段时带上 symbol，结果按符号收窄。影响面为 0 不等于可以删。',
     inputSchema: {
       type: 'object',
-      properties: { file: { type: 'string', description: '仓库根相对路径' } },
+      properties: {
+        file: { type: 'string', description: '仓库根相对路径，也可写成 file#symbol' },
+        symbol: { type: 'string', description: '可选：方法名或结构体字段名，如 DescribeAgent、ID' },
+      },
       required: ['file'],
     },
   },
@@ -101,11 +99,11 @@ const TOOLS: ToolDef[] = [
   {
     name: 'similar',
     description:
-      '写新页面之前问：这类页面本仓已经怎么写了。返回同类页骨架，照着写，不要平行再造一套。',
+      '写新页面或新接口之前问：这类东西本仓已经怎么写了。前端返回同类页骨架；后端返回同一资源的方法家族（Describe/Create/Modify…）、分层骨架和家族缺口。照着写，不要平行再造一套。',
     inputSchema: {
       type: 'object',
       properties: {
-        intent: { type: 'string', description: '要做什么，如「带分页和搜索的列表页」' },
+        intent: { type: 'string', description: '要做什么。前端如「带分页和搜索的列表页」；后端写资源名或方法名，如「AIMCredential」「DeleteAIMCredential」' },
         limit: { type: 'number' },
       },
       required: ['intent'],
@@ -160,34 +158,55 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const repoDir = findRepoRoot(process.cwd());
+export interface CallOptions {
+  /**
+   * 默认 true。false = 只算不记：不写会话状态、不写埋点。
+   * 给可视化沙盘用 —— 人在图上点一下「查影响面」不能被守卫当成 AI 查过而放行，
+   * 也不能混进「AI 真实调用了多少次图谱」的统计里。
+   */
+  sideEffects?: boolean;
+  /** 仓库根。缺省从 cwd 推（MCP 场景）；沙盘服务显式传 */
+  repoDir?: string;
+}
+
+export async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+  opts: CallOptions = {},
+): Promise<string> {
+  const repoDir = opts.repoDir ?? findRepoRoot(process.cwd());
+  const live = opts.sideEffects !== false;
+  const track = (event: Parameters<typeof record>[0], extra?: Parameters<typeof record>[2]) => {
+    if (live) record(event, repoDir, extra);
+  };
 
   switch (name) {
     case 'impact': {
-      const rel = toRepoRelative(repoDir, str(args.file));
+      const { file: rawFile, symbol } = splitFileSymbol(str(args.file), str(args.symbol));
+      const rel = toRepoRelative(repoDir, rawFile);
       // 路径不在仓库里要说清楚。模型拿到空结果会当成"没有影响"，
       // 而真相是"我们压根没查"
       if (!rel) return '路径不在仓库里。';
       const handle = await getGraph(repoDir);
       // 记状态必须在渲染之前 —— 渲染抛异常时状态也该记上，
-      // 否则模型明明查了却还是被拦，会陷入死循环
-      recordQueried(repoDir, rel);
-      record('graph_query', repoDir, { file: rel, detail: 'impact' });
-      return renderImpactCli(handle.graph, rel);
+      // 否则模型明明查了却还是被拦，会陷入死循环。
+      // 带 symbol 时仍按文件记：守卫的粒度是文件
+      if (live) recordQueried(repoDir, rel);
+      track('graph_query', { file: rel, detail: symbol ? 'impact_symbol' : 'impact' });
+      return renderImpactCli(handle.graph, rel, symbol);
     }
 
     case 'hot': {
       const handle = await getGraph(repoDir);
-      recordHotQuery(repoDir);
-      record('graph_query', repoDir, { detail: 'hot' });
+      if (live) recordHotQuery(repoDir);
+      track('graph_query', { detail: 'hot' });
       return renderHotMcp(handle.graph, num(args.limit, 10));
     }
 
     case 'scan': {
       const handle = await getGraph(repoDir);
       const facts = readFacts(repoDir);
-      record('graph_query', repoDir, { detail: 'scan' });
+      track('graph_query', { detail: 'scan' });
       return renderScanMcp(scan(repoDir, handle.graph, facts?.lineLimit ?? DEFAULT_LINE_LIMIT));
     }
 
@@ -219,7 +238,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
         for (const v of ruleHits) {
           for (const r of v.rules) {
             lines.push(`- [${r.id}] ${v.rel} —— ${r.rule}`);
-            record('redline_hit', repoDir, { file: v.rel, rule: r.id });
+            track('redline_hit', { file: v.rel, rule: r.id });
           }
         }
       }
@@ -230,7 +249,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const urlPath = str(args.urlPath);
       if (!urlPath) return '缺少 urlPath。';
       const handle = await getGraph(repoDir);
-      record('graph_query', repoDir, { detail: 'trace' });
+      track('graph_query', { detail: 'trace' });
       return traceOrMiss(handle.graph, urlPath, ctxOf(repoDir, handle));
     }
 
@@ -238,9 +257,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const intent = str(args.intent);
       if (!intent) return '缺少 intent。';
       const handle = await getGraph(repoDir);
-      recordSimilarSearch(repoDir, intent);
-      record('graph_query', repoDir, { detail: 'similar' });
-      return renderSimilar(handle.graph, { intent, limit: num(args.limit, 3) }, ctxOf(repoDir, handle));
+      if (live) recordSimilarSearch(repoDir, intent);
+      track('graph_query', { detail: 'similar' });
+      return renderSimilarAuto(handle.graph, intent, num(args.limit, 3), ctxOf(repoDir, handle));
     }
 
     case 'lib_search': {
@@ -248,8 +267,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       if (!intent) return '缺少 intent。';
       const facts = readFacts(repoDir);
       const info = loadLibrary(repoDir, facts?.componentLibrary ?? null);
-      recordLibSearch(repoDir, intent);
-      record('graph_query', repoDir, { detail: 'lib_search' });
+      if (live) recordLibSearch(repoDir, intent);
+      track('graph_query', { detail: 'lib_search' });
       const docs = componentDocsHint(facts);
       if (!info.pkg) {
         return '本仓没有识别到 UI 组件库。如果确实有，可以在 .codebuddy/repo-facts.json 里手动指定 componentLibrary。' + (docs ? '\n' + docs : '');
@@ -276,13 +295,13 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       if (!hasRedlines(repoDir)) {
         return '本仓没有红线文件（.codebuddy/redlines.json），没有可体检的规则。';
       }
-      record('graph_query', repoDir, { detail: 'audit' });
+      track('graph_query', { detail: 'audit' });
       return formatAuditReport(auditPolicy(loadRedlines(repoDir), repoDir));
     }
 
     case 'contracts': {
       const handle = await getGraph(repoDir);
-      record('graph_query', repoDir, { detail: 'contracts' });
+      track('graph_query', { detail: 'contracts' });
       // 这份渲染自带尾换行（它输出的是一段 .ts 源码草稿），不要再补
       return renderApiContractsAsTs(handle.graph, {
         api: str(args.api) || undefined,

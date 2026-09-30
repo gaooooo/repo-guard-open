@@ -71,6 +71,26 @@ function assertPySourceInSync() {
   }
 }
 
+/**
+ * 可视化页面的 echarts。拷进 assets/viz/vendor/ 并**提交进 git**（与 bin/repo-guard 同策略）：
+ * 用户拿到插件不跑 npm install，内网也不能走 CDN。
+ * 不打进 bin/repo-guard —— 1MB 的渲染库进主产物会拖慢每一次 hook 启动。
+ */
+function copyEcharts() {
+  const src = path.join(ROOT, 'node_modules', 'echarts', 'dist', 'echarts.min.js');
+  const dst = path.join(ROOT, 'assets', 'viz', 'vendor', 'echarts.min.js');
+  if (!fs.existsSync(src)) {
+    if (fs.existsSync(dst)) return; // 没装依赖但已有提交的副本：沿用
+    console.error('[build] 找不到 node_modules/echarts。先跑 `npm install`。');
+    process.exit(1);
+  }
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  const a = fs.readFileSync(src);
+  if (fs.existsSync(dst) && Buffer.compare(a, fs.readFileSync(dst)) === 0) return;
+  fs.writeFileSync(dst, a);
+  console.log(`[build] ${path.relative(ROOT, dst)}  ${(a.length / 1024).toFixed(0)} KB`);
+}
+
 function main() {
   if (!fs.existsSync(ENTRY)) {
     console.error(`[build] 找不到入口：${ENTRY}`);
@@ -113,6 +133,8 @@ function main() {
     console.error(smoke.stderr || smoke.stdout);
     process.exit(1);
   }
+
+  copyEcharts();
 
   const kb = (fs.statSync(OUT).size / 1024).toFixed(0);
   console.log(`[build] ${path.relative(ROOT, OUT)}  ${kb} KB  ${DEV ? '（dev，未压缩）' : ''}`);

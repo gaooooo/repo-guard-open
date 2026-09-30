@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "verify": "node bin/verify-hooks.mjs",
     "verify:parity": "node build/verify-parity.mjs",
-    "check": "npm run typecheck && npm run build && npm run verify && npm run verify:parity && npm run verify:facts",
+    "verify:viz": "node build/verify-viz.mjs",
+    "check": "npm run typecheck && npm run build && npm run verify && npm run verify:parity && npm run verify:facts && npm run verify:viz",
     "//pack": "打部门模板包。先跑 check —— 一个没过回归的包发给别的部门，问题会在我们看不见的地方出现。",
     "pack": "npm run check && node build/pack.mjs",
     "verify:facts": "node build/verify-facts-init.mjs"
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@types/babel__traverse": "^7.28.0",
     "@types/node": "^22.10.5",
+    "echarts": "5.5.1",
     "esbuild": "^0.24.2",
     "typescript": "^5.7.3"
   }

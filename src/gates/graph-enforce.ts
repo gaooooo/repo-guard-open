@@ -51,6 +51,13 @@ export interface EnforceVerdict {
 
 const PASS: EnforceVerdict = { blocked: false };
 
+/** 「本轮查过没有」。缺省读会话状态；可视化沙盘传入假设值，不读也不写真实状态 */
+export interface EnforceSession {
+  similarSearched: boolean;
+  hotQueried: boolean;
+  libSearched: boolean;
+}
+
 /**
  * 新建文件时的强制查询判定。
  *
@@ -62,15 +69,19 @@ export function judgeGraphEnforce(
   cfg: GuardConfig,
   rel: string,
   exists: boolean,
+  session?: EnforceSession,
 ): EnforceVerdict {
   if (!cfg.gates.admission || exists) return PASS;
+  const similarSearched = () => session?.similarSearched ?? hasSimilarSearched(repoDir);
+  const hotQueried = () => session?.hotQueried ?? hasHotQueried(repoDir);
+  const libSearched = () => session?.libSearched ?? hasLibSearched(repoDir);
   const g = cfg.graphEnforce;
   const docs = componentDocsHint(readFacts(repoDir));
 
   if (
     g.newPageSimilar.enabled &&
     matches(g.newPageSimilar.pathPatterns, rel) &&
-    !hasSimilarSearched(repoDir)
+    !similarSearched()
   ) {
     return {
       blocked: true,
@@ -88,7 +99,7 @@ export function judgeGraphEnforce(
   if (
     g.newComponentHot.enabled &&
     matches(g.newComponentHot.pathPatterns, rel) &&
-    !hasHotQueried(repoDir)
+    !hotQueried()
   ) {
     return {
       blocked: true,
@@ -102,7 +113,7 @@ export function judgeGraphEnforce(
   if (
     g.newComponentLibSearch.enabled &&
     matches(g.newComponentLibSearch.pathPatterns, rel) &&
-    !hasLibSearched(repoDir)
+    !libSearched()
   ) {
     return {
       blocked: true,

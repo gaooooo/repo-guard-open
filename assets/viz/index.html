@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>repo-guard · 图谱体检与沙盘</title>
+<link rel="stylesheet" href="app.css">
+<!--RG_BOOT-->
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand"><b>repo-guard</b> <span id="repo"></span> <span id="trust" class="badge"></span></div>
+    <nav class="tabs" role="tablist">
+      <button type="button" data-tab="health" aria-pressed="true">体检</button>
+      <button type="button" data-tab="sandbox" aria-pressed="false">沙盘</button>
+      <button type="button" data-tab="replay" aria-pressed="false">回放</button>
+    </nav>
+    <div class="modes">
+      <button type="button" data-view="files" aria-pressed="true">文件总览</button>
+      <button type="button" data-view="methods" aria-pressed="false">方法图</button>
+      <button type="button" data-view="ego" aria-pressed="false">邻接子图</button>
+    </div>
+    <label class="color">着色
+      <select id="colorBy">
+        <option value="layer">分层</option>
+        <option value="loc">体量（行数）</option>
+        <option value="fanIn">扇入</option>
+        <option value="fanOut">扇出</option>
+        <option value="cx">近似复杂度</option>
+        <option value="public">公共层</option>
+      </select>
+    </label>
+    <input id="q" placeholder="检索方法 / 文件 / 类型" spellcheck="false">
+    <input id="field" placeholder="字段：Agent.ID" spellcheck="false">
+    <input id="similar" placeholder="同类：AIMCredential" spellcheck="false">
+  </header>
+  <div id="stats" class="stats"></div>
+  <main>
+    <div id="chart"></div>
+    <aside id="side"></aside>
+  </main>
+</div>
+<script src="vendor/echarts.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
