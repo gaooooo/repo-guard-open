@@ -34,6 +34,7 @@ const CASES = {
     ['similar', { intent: '带分页和搜索的列表页' }],
     ['trace', { urlPath: '/users' }],
     ['hot', {}],
+    ['hot', { intent: '格式化日期' }],
     ['check', { files: ['src/components/Button/index.tsx'] }],
   ],
   go: [
@@ -42,6 +43,7 @@ const CASES = {
     ['similar', { intent: 'User' }],
     ['trace', { urlPath: '/api/users' }],
     ['hot', {}],
+    ['hot', { intent: 'Paginate' }],
   ],
 };
 
@@ -185,8 +187,57 @@ async function similarUnit() {
   ok(!u.template && /hot/.test(u.unmatchedReason ?? ''), '工具函数不给 CRUD 模板，改提示用 hot');
 }
 
+/** hot 带 intent 的单元用例：中文需求靠注释与词表对上英文方法名，对象词缺一不算「可复用」 */
+async function reuseUnit() {
+  console.log('\n── hot intent（复用检索）──');
+  const out = path.join(os.tmpdir(), `rg-reuse-${process.pid}.mjs`);
+  const esbuild = path.join(ROOT, 'node_modules', '.bin', 'esbuild');
+  const b = spawnSync(esbuild, [path.join(ROOT, 'src/insight/reuse.ts'), '--bundle', '--format=esm', '--platform=node', `--outfile=${out}`, '--log-level=warning']);
+  if (b.status !== 0) {
+    ok(false, `打包 reuse 失败：${b.stderr}`);
+    return;
+  }
+  const m = await import(out);
+  fs.rmSync(out, { force: true });
+  const src = {
+    'internal/logic/tenant_config.go': ['', '// DescribeTenantConfig 查询单个租户配置', 'func DescribeTenantConfig() {}', '', '// DescribeTenant 查询租户', 'func DescribeTenant() {}'].join('\n'),
+    'internal/utils/regex.go': ['', '// EscapeRegex 字符串转译为正则格式', 'func EscapeRegex() {}'].join('\n'),
+    'service/admin/resource.go': ['', '// validateInstance 校验实例ID是否真实存在', 'func validateInstance() {}'].join('\n'),
+    'internal/key/key.go': ['', '// VerifyToken 验证 token', 'func VerifyToken() {}'].join('\n'),
+    'service/a.go': ['', 'func A() {', '  DescribeTenantConfig()', '  EscapeRegex()', '}', 'func B() {', '  EscapeRegex()', '}'].join('\n'),
+  };
+  const fns = [
+    { file: 'internal/logic/tenant_config.go', name: 'DescribeTenantConfig', line: 3, endLine: 3, exported: true, owner: null },
+    { file: 'internal/logic/tenant_config.go', name: 'DescribeTenant', line: 6, endLine: 6, exported: true, owner: null },
+    { file: 'internal/utils/regex.go', name: 'EscapeRegex', line: 3, endLine: 3, exported: true, owner: null },
+    { file: 'service/admin/resource.go', name: 'validateInstance', line: 3, endLine: 3, exported: false, owner: null },
+    { file: 'internal/key/key.go', name: 'VerifyToken', line: 3, endLine: 3, exported: true, owner: null },
+    { file: 'service/a.go', name: 'A', line: 2, endLine: 5, exported: true, owner: null },
+    { file: 'service/a.go', name: 'B', line: 6, endLine: 8, exported: true, owner: null },
+  ];
+  const calls = [
+    { fromFile: 'service/a.go', fromFn: 'A', toFile: 'internal/logic/tenant_config.go', toMethod: 'DescribeTenantConfig', line: 3, kind: 'call', tier: 'extracted' },
+    { fromFile: 'service/a.go', fromFn: 'A', toFile: 'internal/utils/regex.go', toMethod: 'EscapeRegex', line: 4, kind: 'call', tier: 'extracted' },
+    { fromFile: 'service/a.go', fromFn: 'B', toFile: 'internal/utils/regex.go', toMethod: 'EscapeRegex', line: 7, kind: 'call', tier: 'extracted' },
+  ];
+  const modules = Object.keys(src).map((file) => ({ file, imports: [], importedBy: [], symbolCount: 0 }));
+  const graph = { ok: true, repoDir: '/x', modules, classes: [], functions: fns, calls, routes: [], stats: {}, warnings: [], builtAt: 0 };
+  const readSource = (f) => src[f] ?? null;
+
+  const t = m.findReuse(graph, '查询租户配置', { readSource });
+  ok(t.candidates[0]?.fn.name === 'DescribeTenantConfig' && t.candidates[0].full, `中文需求命中英文方法（${t.candidates[0]?.fn.name}）`);
+  ok(!t.candidates.find((c) => c.fn.name === 'DescribeTenant')?.full, '只对上一部分对象词（租户，缺配置）不算可复用');
+  const e = m.findReuse(graph, '转义正则', { readSource });
+  ok(e.candidates[0]?.fn.name === 'EscapeRegex' && e.candidates[0].fanIn === 2, `工具函数按被调用次数给出（fanIn=${e.candidates[0]?.fanIn}）`);
+  const v = m.findReuse(graph, '校验 token', { readSource });
+  ok(v.candidates[0]?.fn.name === 'VerifyToken' && !v.candidates.find((c) => c.fn.name === 'validateInstance')?.full, '只命中动作词（validateInstance）不算可复用');
+  const n = m.findReuse(graph, '格式化时间', { readSource });
+  ok(!n.candidates.some((c) => c.full), '没有现成的就不硬凑「可复用」');
+}
+
 async function main() {
   await similarUnit();
+  await reuseUnit();
   if (!fs.existsSync(TOOL)) {
     console.error(`找不到产物：${TOOL}`);
     process.exit(2);

@@ -34,7 +34,7 @@ import {
 } from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
 import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
-import { renderHotMcp, renderImpactCli } from '../cli/render.js';
+import { renderHotMcp, renderImpactCli, renderReuseFor } from '../cli/render.js';
 import { traceOrMiss } from '../cli/trace.js';
 import { renderScanMcp, scan } from '../cli/scan.js';
 import { renderSimilarAuto } from '../cli/similar.js';
@@ -65,10 +65,14 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: 'hot',
-    description: '写新的公共组件之前问：仓里有哪些被大量入口复用的东西，别重复造轮子。',
+    description:
+      '写新方法、工具函数或公共组件之前问：仓里有没有现成的，别重复造轮子。带 intent（要写什么）时按方法名与注释找相关的现成方法、按被调用次数排序；不带时返回全仓被最多入口依赖的热点（改它们前先 impact）。',
     inputSchema: {
       type: 'object',
-      properties: { limit: { type: 'number', description: '条数，默认 10' } },
+      properties: {
+        intent: { type: 'string', description: '可选：要写什么，如「查询租户配置」「EscapeRegex」「校验 token」' },
+        limit: { type: 'number', description: '条数，默认 10（带 intent 时默认 8）' },
+      },
     },
   },
   {
@@ -198,8 +202,10 @@ export async function callTool(
 
     case 'hot': {
       const handle = await getGraph(repoDir);
+      const intent = str(args.intent);
       if (live) recordHotQuery(repoDir);
-      track('graph_query', { detail: 'hot' });
+      track('graph_query', { detail: intent ? 'hot_intent' : 'hot' });
+      if (intent) return renderReuseFor(handle.graph, intent, num(args.limit, 8));
       return renderHotMcp(handle.graph, num(args.limit, 10));
     }
 

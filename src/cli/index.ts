@@ -39,7 +39,7 @@ import {
 } from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
 import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
-import { renderHotCli, renderImpactCli, RULE } from './render.js';
+import { renderHotCli, renderImpactCli, renderReuseFor, RULE } from './render.js';
 import { hasProblems, renderScanCli, scan } from './scan.js';
 import { renderInit } from './init.js';
 import { runHook } from '../hooks/index.js';
@@ -68,7 +68,7 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard scan [--json]         体量与结构体检（超长文件、循环依赖）
   repo-guard check <文件…>          改动自查：碰没碰公共层和红线，有问题非零退出
   repo-guard impact <文件>[#符号]   改它会波及哪些入口；#符号 收窄到方法或结构体字段
-  repo-guard hot [--limit N]       高扇入热点，写新组件前看有没有现成的
+  repo-guard hot [要写什么] [--limit N] 有没有现成的：带需求按名字与注释找；不带返回全仓热点
   repo-guard trace <路径>          这个页面/接口打到哪里，含反推的出入参
   repo-guard similar <要做什么>     这类页面 / 接口本仓已经怎么写了（后端按方法家族）
   repo-guard lib search <要什么>    UI 组件库里有没有现成的
@@ -266,8 +266,13 @@ async function main(): Promise<number> {
 
     case 'hot': {
       const handle = await getGraph(repoDir);
+      const intent = positionals(argv, 1).join(' ');
       recordHotQuery(repoDir);
-      record('graph_query', repoDir, { detail: 'hot' });
+      record('graph_query', repoDir, { detail: intent ? 'hot_intent' : 'hot' });
+      if (intent) {
+        outText(`\n${renderReuseFor(handle.graph, intent, flagNumber(argv, '--limit', 8))}`);
+        return 0;
+      }
       outText(renderHotCli(handle.graph, flagNumber(argv, "--limit", 10)));
       return 0;
     }

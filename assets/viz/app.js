@@ -346,7 +346,7 @@
     if (tool === 'similar' || tool === 'lib_search') return { intent: n.kind === 'fn' ? n.name : '' };
     if (tool === 'trace') return { urlPath: (r.routes && r.routes[0] ? r.routes[0].split(' ').slice(1).join(' ') : (V.routes[0] || {}).urlPath || '') };
     if (tool === 'check') return { files: n.file ? [n.file] : [] };
-    if (tool === 'hot') return { limit: 10 };
+    if (tool === 'hot') return { intent: '', limit: 10 };
     return {};
   }
   function cliOf(tool, a) {
@@ -354,7 +354,7 @@
     if (tool === 'impact') return 'repo-guard impact ' + q(a.file + (a.symbol ? '#' + a.symbol : ''));
     if (tool === 'similar') return 'repo-guard similar ' + q(a.intent || '');
     if (tool === 'trace') return 'repo-guard trace ' + q(a.urlPath || '');
-    if (tool === 'hot') return 'repo-guard hot --limit ' + (a.limit || 10);
+    if (tool === 'hot') return 'repo-guard hot ' + (a.intent ? q(a.intent) + ' ' : '') + '--limit ' + (a.limit || 10);
     if (tool === 'check') return 'repo-guard check ' + (a.files || []).map(q).join(' ');
     if (tool === 'lib_search') return 'repo-guard lib search ' + q(a.intent || '');
     return 'repo-guard ' + tool;
@@ -364,7 +364,7 @@
     if (tool === 'similar' || tool === 'lib_search') return "<label>intent</label><input id='a_intent' value='" + esc(a.intent) + "'>";
     if (tool === 'trace') return "<label>urlPath</label><input id='a_urlPath' list='routes' value='" + esc(a.urlPath) + "'><datalist id='routes'>" + V.routes.slice(0, 400).map(function (r) { return "<option value='" + esc(r.urlPath) + "'>" + esc(r.method) + '</option>'; }).join('') + '</datalist>';
     if (tool === 'check') return "<label>files</label><input id='a_files' placeholder='空格分隔' value='" + esc((a.files || []).join(' ')) + "'>";
-    if (tool === 'hot') return "<label>limit</label><input id='a_limit' value='" + esc(a.limit) + "'>";
+    if (tool === 'hot') return "<label>intent</label><input id='a_intent' placeholder='要写什么，可空。如：查询租户配置、转义正则' value='" + esc(a.intent || '') + "'><label>limit</label><input id='a_limit' value='" + esc(a.limit) + "'>";
     return "<label></label><span class='muted small'>无参数</span>";
   }
   function readArgs(tool) {
@@ -373,7 +373,7 @@
     if (tool === 'similar' || tool === 'lib_search') return { intent: v('a_intent') };
     if (tool === 'trace') return { urlPath: v('a_urlPath') };
     if (tool === 'check') return { files: v('a_files').split(/\s+/).filter(Boolean) };
-    if (tool === 'hot') return { limit: Number(v('a_limit')) || 10 };
+    if (tool === 'hot') { var h = { limit: Number(v('a_limit')) || 10 }; if (v('a_intent')) h.intent = v('a_intent'); return h; }
     return {};
   }
   function sandboxSide() {

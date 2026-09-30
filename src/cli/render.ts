@@ -20,6 +20,7 @@ import {
   type CodeGraph,
 } from '../graph/graph-builder.js';
 import { analyzeSymbolImpact, SYMBOL_IMPACT_MAX_DEPTH, type SymbolImpactResult } from '../insight/symbol-impact.js';
+import { findReuse, renderReuse, type ReuseResult } from '../insight/reuse.js';
 
 /** 读仓库源码（给方法级影响面补同包裸调用）。读不到返回 null，不抛 */
 export function sourceReader(graph: CodeGraph): (file: string) => string | null {
@@ -245,6 +246,20 @@ export function renderHotCli(graph: CodeGraph, limit: number): string {
     lines.push(`     ${s.routeCount} 个入口  ${s.file}  ${s.method}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+/** 复用检索。沙盘高亮复用同一次计算 */
+export function reuseOf(graph: CodeGraph, intent: string, limit: number): ReuseResult {
+  return findReuse(graph, intent, { limit, readSource: sourceReader(graph) });
+}
+
+/**
+ * hot 带 intent：「我要写 X，仓里有没有现成的」。
+ * 没有相关方法时附全仓热点，并明说与本需求无关 —— 否则模型会把榜单当成候选去复用。
+ */
+export function renderReuseFor(graph: CodeGraph, intent: string, limit: number): string {
+  const fallback = hotSpots(graph, 5).map((s) => `- ${s.file} ${s.method} —— 被 ${s.routeCount} 个入口引用`);
+  return renderReuse(reuseOf(graph, intent, limit), fallback);
 }
 
 /** 高扇入热点（MCP 版）。给 agent 的是紧凑列表，不做终端对齐 */

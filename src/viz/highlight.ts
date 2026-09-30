@@ -16,7 +16,7 @@ import type { CodeGraph, FunctionNode } from '../graph/types.js';
 import { enclosingIndex, functionIds } from '../insight/health.js';
 import { similarMethods, type Layer } from '../insight/similar-methods.js';
 import { splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
-import { resolveSymbol, symbolImpactOf } from '../cli/render.js';
+import { resolveSymbol, reuseOf, symbolImpactOf } from '../cli/render.js';
 
 export type Tone = 'target' | 'entry' | 'direct' | 'indirect' | 'weak' | 'ref';
 
@@ -301,6 +301,36 @@ export function highlightFor(repoDir: string, graph: CodeGraph, name: string, ar
     }
 
     case 'hot': {
+      const intent = s(args.intent);
+      if (intent) {
+        const r = reuseOf(graph, intent, limitOf(8));
+        const full = r.candidates.filter((c) => c.full);
+        const part = r.candidates.filter((c) => !c.full);
+        const callers = new Map<string, string>();
+        const edges: NonNullable<Highlight['edges']> = [];
+        // 只画可复用候选的调用方：部分命中的调用方会把图连成一张网，而它们多半不是要找的
+        for (const c of full.length ? full : part.slice(0, 3)) {
+          for (const f of c.callers.slice(0, 12)) {
+            const id = ix.idOf(f);
+            if (!callers.has(id)) callers.set(id, id);
+            edges.push({ source: id, target: c.id });
+          }
+        }
+        const p = place([
+          { label: '可以直接复用', tone: 'target', col: 0, desc: '需求里的对象词都对上了。被调用越多越该复用，不要再写一个同功能的方法', nodes: full.map((c) => c.id) },
+          { label: '部分命中', tone: 'weak', col: 1, desc: '只对上一部分词，多半不是要找的；看注释再决定', nodes: part.map((c) => c.id) },
+          { label: '正在使用它们的方法', tone: 'direct', col: -1, desc: '已经调用这些现成方法的地方（每个候选最多列 12 个）—— 说明它们已被验证过、在用', nodes: [...callers.keys()] },
+        ]);
+        return {
+          focus: full[0]?.id ?? part[0]?.id ?? null,
+          ...p,
+          edges: edges.filter((e) => p.pos[e.source] && p.pos[e.target]),
+          reading: '中间一列是可复用的现成方法（按被调用次数从上到下），左边是正在用它们的方法，右边是部分命中',
+          notes: r.candidates.length
+            ? ['按方法名单词与方法上方注释做词法匹配，不是语义搜索。']
+            : ['没有名字或注释相近的现成方法，可以新写。'],
+        };
+      }
       const nodes = uniq(hotSpots(graph, limitOf(10)).flatMap((x) => ix.fn(x.file, x.method).slice(0, 1)));
       const p = place([
         { label: '高扇入热点', tone: 'entry', col: 0, desc: '被最多对外接口依赖的方法，按入口数排序。写新方法前先看这里有没有现成的；改它们前先查 impact', nodes },
