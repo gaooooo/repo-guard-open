@@ -173,6 +173,8 @@ function toolSucceeded(input: HookInput): boolean {
   if (!r || typeof r !== 'object') return true;
   if (r.success === false) return false;
   if (r.error) return false;
+  if (r.is_error === true) return false;
+  if (typeof r.exitCode === 'number' && r.exitCode !== 0) return false;
   return true;
 }
 
@@ -291,7 +293,7 @@ function preWrite(input: HookInput): void {
   if (!rel) return; // 仓库外：不管（T2 用例）
 
   // ① L3 循环门
-  const loop = judgeLoop(repoDir, cfg, input.tool_name ?? 'write', input.tool_input, rel);
+  const loop = judgeLoop(repoDir, cfg, input.tool_name ?? 'Write', input.tool_input, rel);
   if (loop.blocked) {
     record('loop_deny', repoDir, { file: rel, detail: loop.kind });
     emitDeny('PreToolUse', loop.reason!);
@@ -453,7 +455,7 @@ function postWrite(input: HookInput): void {
   const raw = writeTarget(input);
   const rel = raw ? toRepoRelative(repoDir, raw) : null;
 
-  noteToolResult(repoDir, cfg, input.tool_name ?? 'write', input.tool_input, rel, toolSucceeded(input));
+  noteToolResult(repoDir, cfg, input.tool_name ?? 'Write', input.tool_input, rel, toolSucceeded(input));
 
   const facts = readFacts(repoDir);
   if (!rel) return;
@@ -495,6 +497,16 @@ function postWrite(input: HookInput): void {
 }
 
 /** 工具失败之后：只更新 L3 计数器，不输出任何东西 */
+/**
+ * Bash 执行之后：只更新循环门计数。非零退出宿主走的是 PostToolUse（tool_response 里
+ * exitCode / error / is_error），不走 PostToolUseFailure —— 真机抓过输入确认。
+ * 没有这一步，Bash 的成功就清不掉连续失败计数。
+ */
+function postBash(input: HookInput): void {
+  const repoDir = repoOf(input);
+  noteToolResult(repoDir, loadGuardConfig(repoDir), input.tool_name ?? 'Bash', input.tool_input, null, toolSucceeded(input));
+}
+
 function postFail(input: HookInput): void {
   const repoDir = repoOf(input);
   const cfg = loadGuardConfig(repoDir);
@@ -615,6 +627,9 @@ export async function runHook(name: string): Promise<number> {
         break;
       case 'post-write':
         postWrite(input);
+        break;
+      case 'post-bash':
+        postBash(input);
         break;
       case 'post-fail':
         postFail(input);

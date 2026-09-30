@@ -84,18 +84,20 @@ interface SessionState {
   /** 本会话改动过的文件。元素 = `<repoId>:<仓库相对路径>`。给 L1 范围门的 maxFiles 预算用 */
   touchedFiles: string[];
   /**
-   * L3 循环门的三个计数器。
+   * L3 循环门的三个计数器。只统计循环门管得着的两类工具：写文件与 Bash。
    *
-   * key 的设计决定了这三项准不准：
-   *   repeat  —— `工具名|入参指纹`，指纹取路径 + 命令的前 120 字符。
-   *              不含全文内容，否则改一个字就成了"新调用"，计数永远到不了阈值
-   *   fail    —— 只有一个 key（'_'），记的是**连续**失败数，成功即清零
-   *   fileFail—— `<repoId>:<文件路径>`，同一个文件反复写失败
+   *   failStreak    —— 同一个调用（`工具名|入参指纹`）**连续失败**了几次。指纹取路径 + 命令的前 120 字符，
+   *                    不含内容：「改一个字再试一次」仍算同一个调用。任何一次成功都清零。
+   *                    之前记的是「同一路径累计调用次数」，成功的也算、从不清零 ——
+   *                    同一个文件正常改到第 4 次就被拦，29 个真实会话回放里 13 个会被误拦
+   *   consecutiveFail —— 连续失败数，任何一次成功都清零。之前只有写文件成功才清零，
+   *                    零散的命令失败攒到 3 次就把写入全拦了，而写不进去又清不掉 —— 死锁
+   *   fileWriteFail —— `<repoId>:<文件路径>` → 这个文件写失败次数，写成功一次就清零
    */
-  repeatCount: Record<string, number>;
+  failStreak: { key: string; n: number } | null;
   consecutiveFail: number;
   fileWriteFail: Record<string, number>;
-  /** 本会话的工具调用总数。L3 迭代预算只能靠它近似 */
+  /** 本会话写文件与跑命令的次数（读、搜不经过插件的钩子，数不到）。L3 迭代预算只能靠它近似 */
   toolCalls: number;
   /** 本会话跑过的工程校验证据（lint / test / build 的命令片段）。L5 用 */
   evidence: string[];
@@ -232,7 +234,7 @@ function emptyState(): SessionState {
     similarPlans: [],
     hotRepos: [],
     touchedFiles: [],
-    repeatCount: {},
+    failStreak: null,
     consecutiveFail: 0,
     fileWriteFail: {},
     toolCalls: 0,
@@ -268,7 +270,10 @@ function load(sid: string): SessionState {
       : [],
     hotRepos: arr(raw.hotRepos),
     touchedFiles: arr(raw.touchedFiles),
-    repeatCount: counts(raw.repeatCount),
+    failStreak:
+      raw.failStreak && typeof raw.failStreak === 'object' && typeof raw.failStreak.key === 'string' && typeof raw.failStreak.n === 'number'
+        ? { key: raw.failStreak.key, n: raw.failStreak.n }
+        : null,
     consecutiveFail: typeof raw.consecutiveFail === 'number' ? raw.consecutiveFail : 0,
     fileWriteFail: counts(raw.fileWriteFail),
     toolCalls: typeof raw.toolCalls === 'number' ? raw.toolCalls : 0,
@@ -467,57 +472,57 @@ export function recordSessionFile(repoDir: string, rel: string): void {
 
 // ══════════════════ L3 循环门：三个计数器 ══════════════════
 
+function callKey(toolName: string, fingerprint: string): string {
+  return `${toolName}|${fingerprint.slice(0, 120)}`;
+}
+
 /**
- * 记一次工具调用，返回这个"调用指纹"到目前为止出现了几次。
+ * 记一次（写文件 / Bash）调用的结果，三个计数器在同一把锁里一起改。
  *
- * 指纹只取路径与命令的前 120 字符，**不含全文内容**。
- * 含全文的话，模型改一个字就成了"新调用"，重复计数永远到不了阈值 ——
- * 而"改一个字再试一次"恰恰是它卡住时最典型的行为。
- *
- * 不带仓库维度：多仓下两个仓的同名文件会合并计数，于是循环门更早触发。
- * "反复在同一个相对路径上打转"本身就是卡住的信号，这个方向偏严，是安全的。
+ * 分开调三个函数的话，三次加锁之间别的进程插进来，计数会互相错位。
  */
-export function bumpRepeat(toolName: string, fingerprint: string): number {
-  const key = `${toolName}|${fingerprint.slice(0, 120)}`;
-  return update((st) => {
-    st.repeatCount[key] = (st.repeatCount[key] ?? 0) + 1;
-    st.toolCalls += 1;
-    return st.repeatCount[key];
-  });
-}
-
-export function repeatCountOf(toolName: string, fingerprint: string): number {
-  return load(sessionId()).repeatCount[`${toolName}|${fingerprint.slice(0, 120)}`] ?? 0;
-}
-
-/** 工具失败：连续失败数 +1，返回新值 */
-export function bumpConsecutiveFail(): number {
-  return update((st) => {
-    st.consecutiveFail += 1;
-    return st.consecutiveFail;
-  });
-}
-
-/** 工具成功：连续失败数清零。**这一步不能漏** —— 漏了就成了"累计失败数" */
-export function clearConsecutiveFail(): void {
-  // 绝大多数调用都是成功且计数本来就是 0：先无锁看一眼，省掉一次加锁写盘
-  if (load(sessionId()).consecutiveFail === 0) return;
+export function noteToolOutcome(o: { repoDir: string; toolName: string; fingerprint: string; rel: string | null; ok: boolean }): void {
+  const key = o.fingerprint ? callKey(o.toolName, o.fingerprint) : '';
   update((st) => {
-    st.consecutiveFail = 0;
+    st.toolCalls += 1;
+    if (o.ok) {
+      st.failStreak = null;
+      st.consecutiveFail = 0;
+      if (o.rel) delete st.fileWriteFail[scopedKey(o.repoDir, o.rel)];
+      return;
+    }
+    st.consecutiveFail += 1;
+    if (key) st.failStreak = st.failStreak?.key === key ? { key, n: st.failStreak.n + 1 } : { key, n: 1 };
+    if (o.rel) {
+      const fk = scopedKey(o.repoDir, o.rel);
+      st.fileWriteFail[fk] = (st.fileWriteFail[fk] ?? 0) + 1;
+    }
   });
+}
+
+/**
+ * 拦过一次就清零：连续失败 / 同文件写失败。
+ *
+ * 这两种拦截的对象是「接下来所有的写入与命令」「这个文件」——
+ * 而清零又要靠写入 / 命令 / 写这个文件成功。不清零的话被拦住就永远出不来，整个会话锁死。
+ * 所以它们是一次性的：拦一次、给出「先确认前提 / 先读文件」的提示，然后放行下一次尝试；
+ * 再连着失败到阈值会再拦。重复失败（同一个调用）只拦那一个调用，不会锁死，不清。
+ */
+export function resetAfterLoopBlock(kind: 'consecutive_fail' | 'file_write_fail', repoDir: string, rel: string | null): void {
+  update((st) => {
+    if (kind === 'consecutive_fail') st.consecutiveFail = 0;
+    else if (rel) delete st.fileWriteFail[scopedKey(repoDir, rel)];
+  });
+}
+
+/** 这个调用眼下连续失败了几次（上一次成功之后） */
+export function failStreakOf(toolName: string, fingerprint: string): number {
+  const s = load(sessionId()).failStreak;
+  return s && s.key === callKey(toolName, fingerprint) ? s.n : 0;
 }
 
 export function consecutiveFailCount(): number {
   return load(sessionId()).consecutiveFail;
-}
-
-/** 同一个文件写失败：+1 并返回新值 */
-export function bumpFileWriteFail(repoDir: string, rel: string): number {
-  const key = scopedKey(repoDir, rel);
-  return update((st) => {
-    st.fileWriteFail[key] = (st.fileWriteFail[key] ?? 0) + 1;
-    return st.fileWriteFail[key];
-  });
 }
 
 export function fileWriteFailCount(repoDir: string, rel: string): number {

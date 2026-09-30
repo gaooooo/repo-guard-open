@@ -451,21 +451,60 @@ writeGuard({
 });
 const rep = 'l3a';
 const repInput = { session_id: rep, tool_name: 'Write', tool_input: { file_path: 'src/views/loop.tsx', content: 'x' } };
-for (let i = 0; i < 3; i++) hook('post-write', repInput);
-add('L3-1', '同一调用重复 3 次 → 拦', 'deny', hook('pre-write', repInput));
-add('L3-2', '换一个文件 → 不受重复计数影响', 'allow',
-  hook('pre-write', { session_id: rep, tool_name: 'Write', tool_input: { file_path: 'src/views/other.tsx', content: 'x' } }));
+const failResp = { tool_response: { success: false, error: 'old_string not found' } };
+const okResp = { tool_response: { success: true } };
+for (let i = 0; i < 3; i++) hook('post-write', { ...repInput, ...failResp });
+add('L3-1', '同一调用连续失败 3 次 → 拦', 'deny', hook('pre-write', repInput));
+// 连着 3 次失败同时也是「连续失败 3 次」：换文件第一次会被连续失败拦一次，之后清零
+const otherInput = { session_id: rep, tool_name: 'Write', tool_input: { file_path: 'src/views/other.tsx', content: 'x' } };
+add('L3-2', '换一个文件 → 被「连续失败」拦一次', 'deny', hook('pre-write', otherInput));
+add('L3-2b', '连续失败拦过一次后清零 → 换文件放行', 'allow', hook('pre-write', otherInput));
+add('L3-2c', '原来那个调用仍在重复失败 → 仍拦（重复失败要成功一次才清）', 'deny', hook('pre-write', repInput));
+
+// 正常开发：同一个文件成功改很多次，不是卡住
+const edits = 'l3e';
+const editInput = { session_id: edits, tool_name: 'Edit', tool_input: { file_path: 'src/views/router.tsx' } };
+for (let i = 0; i < 6; i++) hook('post-write', { ...editInput, ...okResp });
+add('L3-5', '同一文件成功改 6 次 → 仍放行（成功不算重复）', 'allow', hook('pre-write', editInput));
+// 失败两次、成功一次、再失败一次：成功把三项计数都清掉了
+const mix = 'l3m';
+const mixInput = { session_id: mix, tool_name: 'Edit', tool_input: { file_path: 'src/views/mix.tsx' } };
+hook('post-write', { ...mixInput, ...failResp });
+hook('post-write', { ...mixInput, ...failResp });
+hook('post-write', { ...mixInput, ...okResp });
+hook('post-write', { ...mixInput, ...failResp });
+add('L3-6', '失败 2 次 → 成功 1 次 → 再失败 1 次：三项计数都被成功清过，放行', 'allow', hook('pre-write', mixInput));
 
 const fail = 'l3b';
 for (let i = 0; i < 3; i++) {
-  hook('post-fail', { session_id: fail, tool_name: 'Bash', tool_input: { command: 'npm run nope' } });
+  hook('post-bash', { session_id: fail, tool_name: 'Bash', tool_input: { command: `npm run nope${i}` }, tool_response: { exitCode: 1, is_error: true, error: 'x' } });
 }
 add('L3-3', '连续失败 3 次 → 拦', 'deny',
   hook('pre-write', { session_id: fail, tool_input: { file_path: 'src/views/page/index.tsx' } }));
-// 成功一次要清零 —— 漏了这一步"连续失败"就变成了"累计失败"
-hook('post-write', { session_id: fail, tool_name: 'Write', tool_input: { file_path: 'src/views/ok.tsx' }, tool_response: { success: true } });
-add('L3-4', '成功一次后连续失败计数清零 → 放行', 'allow',
+// 拦过一次就清零 —— 否则要靠「写成功」清零，而写又被拦，会话从此锁死
+add('L3-7', '拦过一次后不锁死：下一次写入放行', 'allow',
   hook('pre-write', { session_id: fail, tool_input: { file_path: 'src/views/page/index.tsx' } }));
+
+const fail2 = 'l3c';
+for (let i = 0; i < 2; i++) {
+  hook('post-bash', { session_id: fail2, tool_name: 'Bash', tool_input: { command: `grep nope${i}` }, tool_response: { exitCode: 1, is_error: true, error: 'x' } });
+}
+// Bash 成功也要清零 —— 之前只有写文件成功才清，零散命令失败会攒到阈值
+hook('post-bash', { session_id: fail2, tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { exitCode: 0 } });
+hook('post-bash', { session_id: fail2, tool_name: 'Bash', tool_input: { command: 'grep nope9' }, tool_response: { exitCode: 1, is_error: true, error: 'x' } });
+add('L3-4', '命令成功一次后连续失败计数清零 → 放行', 'allow',
+  hook('pre-write', { session_id: fail2, tool_input: { file_path: 'src/views/page/index.tsx' } }));
+// 读 / 搜的失败不计：它们的成功没有钩子来清零
+for (let i = 0; i < 4; i++) hook('post-fail', { session_id: 'l3r', tool_name: 'Read', tool_input: { file_path: `src/nope${i}.ts` } });
+add('L3-8', 'Read 失败 4 次 → 不计入，放行', 'allow',
+  hook('pre-write', { session_id: 'l3r', tool_input: { file_path: 'src/views/page/index.tsx' } }));
+
+const wf = 'l3w';
+const wfInput = { session_id: wf, tool_name: 'Edit', tool_input: { file_path: 'src/views/wf.tsx' } };
+hook('post-fail', wfInput);
+hook('post-write', { ...wfInput, ...okResp });
+hook('post-fail', { ...wfInput, tool_input: { file_path: 'src/views/wf.tsx', old_string: 'y' } });
+add('L3-9', '同文件写失败后写成功一次 → 清零，再失败一次仍放行', 'allow', hook('pre-write', wfInput));
 
 // ── L5 交付门 ──
 writeGuard({

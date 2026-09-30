@@ -2,8 +2,18 @@
  * L3 循环门 —— 捕捉失控，不是捕捉错误。
  *
  * ── 四项里只有前三项能真拦 ──
- * 重复调用 / 连续失败 / 同文件写失败：**只依赖工具调用序列**，
+ * 重复失败 / 连续失败 / 同文件写失败：**只依赖工具调用序列**，
  * `PostToolUse` 计数 + `PreToolUse` 短路就能实现。
+ *
+ * ── 只数「失败」，成功就清零 ──
+ * 卡住的样子是「同一个调用反复失败」「一连串失败没有一次成功」，不是「同一个文件改了很多次」。
+ * 之前按「同一路径累计调用次数」算，成功也计、从不清零：本机 29 个真实会话（4197 次调用）回放，
+ * 默认阈值下 13 个会话被拦，而这些会话里最长的连续失败只有 2 次 —— 一次真卡住都没有。
+ * 改成只数连续失败后，同一批会话误拦为 0。
+ *
+ * ── 只统计写文件与 Bash ──
+ * 循环门只拦这两类（PreToolUse 只挂在它们上）。Read / Grep 的失败也算进来的话，
+ * 它们的成功又没有钩子来清零，连续失败只增不减。
  *
  * 迭代预算不行。CodeBuddy 里迭代循环归宿主，插件拿不到 iteration 序号。
  * deerclaw 撞 maxIterations 时是**优雅降级**（产出已完成工作摘要 + 可续提示），
@@ -20,13 +30,11 @@
  * 拦下来并给"换个路径"的提示，比让它转 20 圈划算。
  */
 import {
-  bumpConsecutiveFail,
-  bumpFileWriteFail,
-  bumpRepeat,
-  clearConsecutiveFail,
   consecutiveFailCount,
+  failStreakOf,
   fileWriteFailCount,
-  repeatCountOf,
+  noteToolOutcome,
+  resetAfterLoopBlock,
   toolCallCount,
 } from '../runtime/session-state.js';
 import type { GuardConfig } from './config.js';
@@ -53,6 +61,13 @@ export interface LoopVerdict {
   kind?: 'repeat' | 'consecutive_fail' | 'file_write_fail';
 }
 
+/** 循环门管得着的工具：写文件与 Bash（与 hooks.json 里 PreToolUse / PostToolUse 的 matcher 一致） */
+const COUNTED = /^(Write|Edit|MultiEdit|NotebookEdit|write_to_file|replace_in_file|edit_file|multi_replace|Bash|execute_command)$/;
+
+export function isCountedTool(toolName: string): boolean {
+  return COUNTED.test(toolName);
+}
+
 const PASS: LoopVerdict = { blocked: false };
 
 /** 工具执行**之前**：看三个计数器有没有到阈值 */
@@ -67,14 +82,14 @@ export function judgeLoop(
 
   const fp = fingerprint(toolInput);
   if (fp) {
-    const n = repeatCountOf(toolName, fp);
+    const n = failStreakOf(toolName, fp);
     if (n >= cfg.loop.repeatToolCallThreshold) {
       return {
         blocked: true,
         kind: 'repeat',
         reason:
-          `同一个调用已经重复 ${n} 次（${toolName} ${fp}）。\n` +
-          '重复同一个操作说明当前路径走不通。**换个方式**：\n' +
+          `同一个调用已经连续失败 ${n} 次（${toolName} ${fp}）。\n` +
+          '反复重试同一个操作说明当前路径走不通。**换个方式**：\n' +
           '  · 如果是在试错改代码，先把报错完整读一遍，别改一个字就重试\n' +
           '  · 如果是在找东西，换关键词或换工具（Grep → Glob → 图谱查询）\n' +
           '  · 如果确实卡住了，说明卡在哪，让人来看',
@@ -84,19 +99,22 @@ export function judgeLoop(
 
   const fails = consecutiveFailCount();
   if (fails >= cfg.loop.consecutiveFailThreshold) {
+    resetAfterLoopBlock('consecutive_fail', repoDir, null);
     return {
       blocked: true,
       kind: 'consecutive_fail',
       reason:
         `已经连续失败 ${fails} 次。\n` +
         '连续失败通常不是这一步的问题，而是前提错了（路径不对、依赖没装、环境不对）。\n' +
-        '先确认前提，或者把失败信息原样报给人 —— 不要继续试。',
+        '先确认前提，或者把失败信息原样报给人 —— 不要继续试。\n' +
+        '（这次拦截之后计数清零；再连续失败到阈值会再拦。）',
     };
   }
 
   if (rel) {
     const fileFails = fileWriteFailCount(repoDir, rel);
     if (fileFails >= cfg.loop.sameFileWriteFailThreshold) {
+      resetAfterLoopBlock('file_write_fail', repoDir, rel);
       return {
         blocked: true,
         kind: 'file_write_fail',
@@ -122,33 +140,24 @@ export function noteToolResult(
 ): void {
   // 计数**不受开关控制**：关着的时候也要能回答"如果开了会拦多少次"。
   // 没有这个数据，人永远不知道该不该开。
-  const fp = fingerprint(toolInput);
-  if (fp) bumpRepeat(toolName, fp);
-
-  if (ok) {
-    // 这一步不能漏 —— 漏了"连续失败"就变成了"累计失败"，
-    // 一次会话里零散失败 3 次就会被误拦
-    clearConsecutiveFail();
-    return;
-  }
-  bumpConsecutiveFail();
-  if (rel) bumpFileWriteFail(repoDir, rel);
+  if (!isCountedTool(toolName)) return;
+  noteToolOutcome({ repoDir, toolName, fingerprint: fingerprint(toolInput), rel, ok });
   void cfg;
 }
 
 /**
  * Stop 时的迭代预算摘要。**只提醒，不阻止停止。**
  *
- * 用工具调用总数近似 iteration 数。这个近似是偏高的（一轮里可能调多个工具），
- * 所以阈值取配置值的 1.5 倍，宁可不提也别乱提。
+ * 用「写文件 + 跑命令」的次数近似轮数。读、搜不经过插件钩子，数不到，所以这个数偏低；
+ * 一轮里又可能写好几个文件，所以也可能偏高。两头抵一抵，阈值直接取配置值。
+ *（之前取 1.5 倍，那时数的只是写文件与失败，更偏低，基本不会触发。）
  */
 export function iterationNote(cfg: GuardConfig): string {
   if (!cfg.gates.loop || !cfg.loop.enabled) return '';
   const calls = toolCallCount();
-  const soft = Math.floor(cfg.loop.maxIterations * 1.5);
-  if (calls < soft) return '';
+  if (calls < cfg.loop.maxIterations) return '';
   return (
-    `本会话已经调用了 ${calls} 次工具（参考预算 ${cfg.loop.maxIterations} 轮）。\n` +
+    `本会话已经写文件 / 跑命令 ${calls} 次（参考预算 ${cfg.loop.maxIterations} 轮）。\n` +
     '如果任务还没完成，建议停下来把"已完成 / 还差什么"列清楚再继续 —— ' +
     '长会话的后半程上下文会被压缩，早期的约束可能已经不在视野里了。'
   );

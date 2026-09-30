@@ -92,6 +92,18 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "_": "L3 循环门计数（Bash）：命令成功才能清掉连续失败计数；非零退出宿主走 PostToolUse 而不是 PostToolUseFailure。只更新计数器，不输出任何东西。",
+        "matcher": "Bash|execute_command",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "L3 计数器（命令）",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-bash",
+            "timeout": 5
+          }
+        ]
       }
     ],
 
