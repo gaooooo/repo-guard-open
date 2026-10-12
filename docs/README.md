@@ -14,7 +14,7 @@
 | [`docs/commands.md`](commands.md) | `commands/` —— 斜杠命令、为什么命令这么少 |
 | [`docs/skills.md`](skills.md) | `skills/` —— 技能、description 怎么写、frontmatter hooks 的闸门 |
 
-控制面说明与示例（汇报页，左菜单右内容）：[`control-examples.html`](control-examples.html)。
+控制面规范站（HTML 渲染 Markdown）：[`control-spec/`](control-spec/README.md)。
 
 分层重构：[`DESIGN-SEVEN-LAYERS.md`](DESIGN-SEVEN-LAYERS.md)（作者目录 `layers/`）。
 
@@ -22,7 +22,9 @@
 
 红线说明：[`REDLINES.md`](REDLINES.md)。
 
-图谱说明：[`GRAPH.md`](GRAPH.md)。
+图谱说明：[`GRAPH.md`](GRAPH.md)。图谱可视化能力设计：[`GRAPH-VIZ.md`](GRAPH-VIZ.md)。
+
+WorkBuddy 接入与多仓技术方案：[`GRAPH-MULTI-REPO-SCHEME.md`](GRAPH-MULTI-REPO-SCHEME.md)（对照开源 CodeGraph MCP：主图谱用本引擎，跨仓走契约索引）。
 
 人审说明：[`HUMAN-REVIEW.md`](HUMAN-REVIEW.md)。
 

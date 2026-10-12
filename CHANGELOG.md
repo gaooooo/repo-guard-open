@@ -2,6 +2,11 @@
 
 ## 未发布
 
+### viz 文件总览展开后显示方法名
+
+展开某个 `.go` 时，类型/方法挂在文件右侧（与四仓图同一套列偏移），画出 file/cls → 方法的包含边。
+调用边落在方法节点上；对端未展开则接到对方文件，不再把 import 扇形扎在父文件上。
+
 ### facts.json 按仓库生成
 
 `init --write --all` / `guard init --write` / `layers init --write` 不再拷贝身份服务示例模板。

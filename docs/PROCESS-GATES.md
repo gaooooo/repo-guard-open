@@ -16,25 +16,25 @@
 
 ## 和别的层怎么分
 
-| 层 | 问的是 | 过程门禁做不做 |
-|---|---|---|
-| 工程事实 | 公共层在哪、行数上限 | 只用 `repo-facts.json` 的清单，不在这里填目录 |
-| 红线 | 哪个符号不许少 | 判定挂在同一条写前链上，但规则写 `redlines.json`；`admission: false` 时不上膛 |
-| 人审 | 何时把决定权交回人 | 不做。`stopConditions` 是 T4 注入；红线命中后的 ask 是 `human-review.json` |
-| 图谱 | 影响面 / 同类 / 热点 | 门禁只要求「本轮查过没」，不在 hook 里建图 |
-| 合并门禁 | 进主干前过没过 | 不做。Stop 不硬拦 `git commit` |
+| 层    | 问的是           | 过程门禁做不做                                                      |
+| ---- | ------------- | ------------------------------------------------------------ |
+| 工程事实 | 公共层在哪、行数上限    | 只用 `repo-facts.json` 的清单，不在这里填目录                             |
+| 红线   | 哪个符号不许少       | 判定挂在同一条写前链上，但规则写 `redlines.json`；`admission: false` 时不上膛     |
+| 人审   | 何时把决定权交回人     | 不做。`stopConditions` 是 T4 注入；红线命中后的 ask 是 `human-review.json` |
+| 图谱   | 影响面 / 同类 / 热点 | 门禁只要求「本轮查过没」，不在 hook 里建图                                     |
+| 合并门禁 | 进主干前过没过       | 不做。Stop 不硬拦 `git commit`                                     |
 
 ---
 
 ## 默认就在跑：公共层 impact
 
-| | |
-|---|---|
-| 拦 | 文件在 `repo-facts.json` 的 `publicLayer` 下 **且已存在** **且** 本会话没查过该文件的 impact |
-| 放 | 新建公共层文件；公共层之外；已经查过 impact 的同一文件；仓库外路径 |
-| 开关 | **不受** `admission` 控制。没 `repo-facts.json` → 不拦，并明说守卫未生效 |
-| 落点 | `PreToolUse` 写工具（Write / Edit / MultiEdit 等）→ `permissionDecision: deny` |
-| Bash | 命令看起来像在用 shell 写公共层 → **只提醒不拦**（路径可能是变量拼的，硬拦误伤率不可接受） |
+|      |                                                                          |
+| ---- | ------------------------------------------------------------------------ |
+| 拦    | 文件在 `repo-facts.json` 的 `publicLayer` 下 **且已存在** **且** 本会话没查过该文件的 impact |
+| 放    | 新建公共层文件；公共层之外；已经查过 impact 的同一文件；仓库外路径                                    |
+| 开关   | **不受** `admission` 控制。没 `repo-facts.json` → 不拦，并明说守卫未生效                  |
+| 落点   | `PreToolUse` 写工具（Write / Edit / MultiEdit 等）→ `permissionDecision: deny` |
+| Bash | 命令看起来像在用 shell 写公共层 → **只提醒不拦**（路径可能是变量拼的，硬拦误伤率不可接受）                     |
 
 查过之后放行也记一笔，用来看这道门有没有在做有用功。
 
@@ -87,11 +87,11 @@ UserPromptSubmit 按任务路由注入「去读这些文件」。
 
 只管**新建**文件；已存在的文件走 impact，不走这三条。
 
-| 开关 | 要求本轮先查 |
-|---|---|
-| `newPageSimilar` | similar（前端：同类页；后端：同类 handler/接口） |
-| `newComponentHot` | hot（仓内高扇入，别重造） |
-| `newComponentLibSearch` | lib search（组件库有没有现成的） |
+| 开关                      | 要求本轮先查                           |
+| ----------------------- | -------------------------------- |
+| `newPageSimilar`        | similar（前端：同类页；后端：同类 handler/接口） |
+| `newComponentHot`       | hot（仓内高扇入，别重造）                   |
+| `newComponentLibSearch` | lib search（组件库有没有现成的）            |
 
 `repo-guard guard init --write` 会按本仓**已有目录**填 pathPatterns（前端 views/pages/components，后端 handler/logic/router 与 pkg/utils）。enabled 默认 false。硬拦还要打开 `admission` 和对应 enabled。人可以改 glob；已有非空 patterns 不会被覆盖。
 
@@ -101,12 +101,12 @@ UserPromptSubmit 按任务路由注入「去读这些文件」。
 
 捕捉失控，不是捕捉一次写错。
 
-| 项 | 默认阈值 | 行为 |
-|---|---|---|
-| 同一调用指纹重复 | 3 | deny |
-| 连续失败 | 3 | deny |
-| 同文件写失败 | 2 | deny |
-| 迭代预算 | 80 | **只观测**。插件拿不到宿主的 round 序号，Stop 上给摘要，不阻止停止 |
+| 项        | 默认阈值 | 行为                                        |
+| -------- | ---- | ----------------------------------------- |
+| 同一调用指纹重复 | 3    | deny                                      |
+| 连续失败     | 3    | deny                                      |
+| 同文件写失败   | 2    | deny                                      |
+| 迭代预算     | 80   | **只观测**。插件拿不到宿主的 round 序号，Stop 上给摘要，不阻止停止 |
 
 指纹取路径和命令，**不取文件内容**：改一个字再试一次是卡住时的典型动作，把内容算进指纹会永远到不了阈值。
 
@@ -157,4 +157,3 @@ deny / ask 等事件写到 `$HOME` 下，**不进你的 git**。只观测。
 5. `repo-guard guard show` 看实际生效；总闸关着时子项 `enabled: true` 也不生效
 
 `verify-hooks` 里有一组「删掉过程门禁配置后，公共层守卫仍在、提问不再注入」的用例：项目层不存在 = 除核心 impact 外零行为变化。
-

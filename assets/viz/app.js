@@ -87,9 +87,9 @@
 
   // ─────────────── 布局 ───────────────
   // 分层列：调用方在左、被调方在右（路由 → 接口 → SDK → 逻辑 → 存储 → DTO）
-  function layerX(layer, present) {
+  function layerX(layer, present, colW) {
     var order = LAYERS.filter(function (l) { return !present || present[l]; });
-    var i = order.indexOf(layer); return (i < 0 ? order.length : i) * 330;
+    var i = order.indexOf(layer); return (i < 0 ? order.length : i) * (colW || 330);
   }
 
   function layoutFiles(nodes) {
@@ -98,15 +98,25 @@
       if (n.kind === 'file') (cols[n.layer] = cols[n.layer] || []).push(n);
       else if (n.kind === 'fn' || n.kind === 'cls') (kids[n.file] = kids[n.file] || []).push(n);
     });
+    var colW = Object.keys(kids).length ? 460 : 330;
     var out = [];
     Object.keys(cols).forEach(function (layer) {
-      var x = layerX(layer, cols), y = 60;
+      var x = layerX(layer, cols, colW), y = 60;
       out.push({ id: 'col:' + layer, name: LAYER_LABEL[layer] + ' · ' + cols[layer].length, kind: 'col', x: x, y: 10, fixed: true, symbolSize: 1, label: { show: true, color: LAYER_COLOR[layer], fontSize: 13, fontWeight: 600 } });
       cols[layer].sort(function (a, b) { return a.file.localeCompare(b.file); }).forEach(function (f) {
         out.push(Object.assign({}, f, { x: x, y: y, fixed: true }));
-        y += 22;
-        (kids[f.file] || []).sort(function (a, b) { return (a.kind === 'cls' ? 0 : 1) - (b.kind === 'cls' ? 0 : 1) || (a.line || 0) - (b.line || 0); })
-          .forEach(function (k) { out.push(Object.assign({}, k, { x: x + 40, y: y, fixed: true })); y += 18; });
+        var group = (kids[f.file] || []).slice().sort(function (a, b) {
+          return (a.kind === 'cls' ? 0 : 1) - (b.kind === 'cls' ? 0 : 1) || (a.line || 0) - (b.line || 0);
+        });
+        if (group.length) {
+          // 与四仓图相同：类型/方法挂在文件右侧，类型稍近、方法再偏一列
+          var ky = y - 6;
+          group.forEach(function (k) {
+            out.push(Object.assign({}, k, { x: x + 130 + (k.kind === 'fn' ? 40 : 0), y: ky, fixed: true }));
+            ky += 22;
+          });
+          y = Math.max(y + 28, ky + 14);
+        } else y += 26;
       });
     });
     return out;
@@ -151,7 +161,7 @@
 
   // ─────────────── 视图 ───────────────
   function edgeStyle(rel) {
-    if (rel === 'owns') return { color: '#334155', opacity: 0.25, width: 1, curveness: 0 };
+    if (rel === 'owns') return { color: '#3a5168', opacity: 0.45, width: 1, curveness: 0.08 };
     if (rel === 'import') return { color: '#64748b', opacity: 0.18, width: 1, type: 'dashed', curveness: 0.15 };
     if (rel === 'inferred') return { color: '#fbbf24', opacity: 0.7, width: 1.3, type: 'dashed', curveness: 0.12 };
     return { color: '#67e8f9', opacity: 0.55, width: 1.3, curveness: 0.2 };
@@ -168,7 +178,7 @@
       return Object.assign({}, n, {
         symbolSize: sizeOf(n) + (n.id === state.focus ? 8 : 0),
         itemStyle: { color: t ? TONE[t] : colorOf(n), borderColor: n.god ? '#f43f5e' : n.id === state.focus ? '#fff' : 'transparent', borderWidth: n.god || n.id === state.focus ? 2 : 0 },
-        label: { show: !!labeled, position: 'right', color: '#e8eef6', fontSize: 10, formatter: n.kind === 'file' ? n.file.split('/').slice(-2).join('/') : n.name }
+        label: { show: !!labeled, position: (n.kind === 'file' && state.expanded[n.file]) ? 'left' : 'right', color: '#e8eef6', fontSize: 10, formatter: n.kind === 'file' ? n.file.split('/').slice(-2).join('/') : n.name }
       });
     });
     var ls = links.filter(function (l) { return ids[l.source] && ids[l.target]; }).map(function (l) {
@@ -181,7 +191,7 @@
         type: 'graph', layout: 'none', data: data, links: ls, roam: true, draggable: false,
         emphasis: { focus: 'adjacency', lineStyle: { width: 2.5, opacity: 0.9 }, label: { show: true } },
         blur: { itemStyle: { opacity: 0.08 }, lineStyle: { opacity: 0.03 } },
-        labelLayout: { hideOverlap: true }, scaleLimit: { min: 0.05, max: 8 }
+        labelLayout: { hideOverlap: opts.hideOverlap !== false }, scaleLimit: { min: 0.05, max: 8 }
       }]
     }, true);
   }
@@ -195,13 +205,44 @@
     return lines.join('<br>');
   }
 
-  // 总览只画与「选中 / 展开」文件相连的边：Go 的 import 以包为单位展开到每个文件，全画是一堵墙
+  // 总览：未展开时只画选中文件的 import（全画是一堵墙）。
+  // 展开后改走四仓图：包含边挂方法，调用边落在方法上，不再把扇形扎在父文件。
   function showFiles() {
     var nodes = V.nodes.filter(function (n) { return n.kind === 'file' || ((n.kind === 'fn' || n.kind === 'cls') && state.expanded[n.file]); });
     var focusFile = state.focus && nmap[state.focus] ? nmap[state.focus].file : null;
-    var touch = function (id) { var n = nmap[id]; return n && (n.file === focusFile || state.expanded[n.file]); };
-    var links = linksBy.import.concat(linksBy.call).filter(function (l) { return touch(l.source) || touch(l.target); });
-    draw(layoutFiles(nodes), links);
+    var vis = {};
+    nodes.forEach(function (n) { vis[n.id] = 1; });
+    var both = function (l) { return vis[l.source] && vis[l.target]; };
+    var expandedFile = function (id) { var n = nmap[id]; return n && state.expanded[n.file]; };
+    var seen = {}, links = [];
+    var push = function (l) {
+      var k = (l.rel || '') + ':' + l.source + '>' + l.target;
+      if (seen[k] || l.source === l.target) return;
+      seen[k] = 1;
+      links.push(l);
+    };
+    (linksBy.owns || []).forEach(function (l) {
+      var s = nmap[l.source];
+      if (s && s.kind !== 'svc' && both(l)) push(l);
+    });
+    (linksBy.call || []).forEach(function (l) {
+      if (both(l)) { push(l); return; }
+      var s = nmap[l.source], t = nmap[l.target];
+      if (!s || !t) return;
+      // 对端文件没展开：调用接到那个文件节点，而不是收回到本文件父节点
+      if (vis[l.source] && t.kind === 'fn' && vis['file:' + t.file] && !state.expanded[t.file]) {
+        push({ source: l.source, target: 'file:' + t.file, rel: 'call' });
+      }
+      if (vis[l.target] && s.kind === 'fn' && vis['file:' + s.file] && !state.expanded[s.file]) {
+        push({ source: 'file:' + s.file, target: l.target, rel: 'call' });
+      }
+    });
+    (linksBy.import || []).forEach(function (l) {
+      if (!both(l) || expandedFile(l.source) || expandedFile(l.target)) return;
+      var s = nmap[l.source], t = nmap[l.target];
+      if (s && t && (s.file === focusFile || t.file === focusFile)) push(l);
+    });
+    draw(layoutFiles(nodes), links, { labelAll: true, hideOverlap: false });
   }
   function showMethods() {
     var nodes = V.nodes.filter(function (n) { return n.kind === 'fn'; });

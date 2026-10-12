@@ -142,6 +142,8 @@ deerclaw 支持接入多仓，是因为它有服务端把 N 个仓的图谱都�
 
 服务端要为谁建图？三条路都不通：
 
+本地插件没有这个问题：图谱没有分支维度，只有工作区的一个「现在」。同事 push 了但你没 pull，图**不应**更新——那些代码不在磁盘上。`pull` / 切分支之后，下次 MCP/CLI 查询因 HEAD 变化自动重建。协作口径见 [GRAPH-MULTI-REPO-SCHEME.md §3.7](GRAPH-MULTI-REPO-SCHEME.md)。
+
 - **只建默认分支** → 开发者在 feature 分支上，图谱和他手上的代码差 N 个 commit
 - **每个活跃分支都建** → N 仓 × M 分支，而且 feature 分支生命周期短、建完就废
 - **按需建**（收到查询才建那个 commit） → 首次查询几十秒，而 `pre-write` 只有十几秒预算
@@ -232,5 +234,6 @@ join key 现成：consumer 侧的 `toMethod` 和 provider 侧的 `method + urlPa
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-10 | 对外技术方案：[`GRAPH-MULTI-REPO-SCHEME.md`](GRAPH-MULTI-REPO-SCHEME.md)。WorkBuddy 按第三方 MCP 同一槽位接入本图谱；跨仓仍走契约索引，不把 CodeGraph 当影响面权威源 |
 | 2026-09-18 | 初版。会话状态的仓库维度已修（1.4），G3 用例钉住。其余为设计，尚未实现 |
 </content>
