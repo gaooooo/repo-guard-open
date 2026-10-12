@@ -65,6 +65,113 @@ export function findRepoRoot(start: string): string {
   return path.resolve(start);
 }
 
+/** 这个目录本身是不是仓库根（有任一锚点） */
+export function isRepoRoot(dir: string): boolean {
+  return ROOT_ANCHORS.some((a) => {
+    try {
+      return fs.existsSync(path.join(dir, a));
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** 多仓工作区最多认几个子仓。父目录下随手放了几十个仓时，会话级钩子不能逐个读配置 */
+const MAX_CHILD_REPOS = 20;
+
+/**
+ * cwd 下一层的子仓（带 .git 的目录）。cwd 本身是仓库根、或在某个仓里面时不算多仓工作区，返回空。
+ *
+ * ── 为什么需要它 ──
+ * 多仓团队常把前端、后端、公共库放在同一个父目录下，从父目录打开会话。
+ * 父目录不是仓库，按 cwd 找仓会找到父目录本身 —— 读不到任何一个仓的配置，
+ * 于是 SessionStart 说「没跑过 init」、写前守卫全部失效。
+ * 只认 `.git`、只看一层：父目录下的普通子目录（docs/、scripts/）不能被当成仓。
+ */
+export function childRepos(cwd: string): string[] {
+  const dir = path.resolve(cwd);
+  if (isRepoRoot(dir)) return [];
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const name of names.sort()) {
+    if (name.startsWith('.') || name === 'node_modules') continue;
+    const sub = path.join(dir, name);
+    try {
+      if (fs.statSync(sub).isDirectory() && fs.existsSync(path.join(sub, '.git'))) out.push(sub);
+    } catch {
+      /* 读不了：跳过 */
+    }
+    if (out.length >= MAX_CHILD_REPOS) break;
+  }
+  // cwd 其实在某个 git 仓里面（仓的子目录下恰好有嵌套仓）：按单仓处理。
+  // 只看 .git —— 家目录里放了个 package.json 很常见，不能因此把多仓工作区认成单仓
+  if (out.length && gitAncestor(path.dirname(dir))) return [];
+  return out;
+}
+
+function gitAncestor(start: string): string | null {
+  let cur = path.resolve(start);
+  for (let i = 0; i < 64; i++) {
+    if (fs.existsSync(path.join(cur, '.git'))) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+  return null;
+}
+
+/** 往上找仓库根，找不到返回 null（不退回起点） */
+function findRepoRootStrict(start: string): string | null {
+  let cur = path.resolve(start);
+  for (let i = 0; i < 40; i++) {
+    if (isRepoRoot(cur)) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+  return null;
+}
+
+/**
+ * 会话涉及的仓：多仓工作区 → 全部子仓；否则 → cwd 所在的那一个仓。
+ * 给 SessionStart / 提问 / Stop 这些不针对具体文件的钩子用。
+ */
+export function sessionRepos(cwd: string): string[] {
+  const kids = childRepos(cwd);
+  return kids.length ? kids : [findRepoRoot(cwd)];
+}
+
+/**
+ * 某个路径属于哪个仓。返回 null = 不在任何仓里（调用方按「仓库外，不管」处理）。
+ *
+ * 顺序：
+ *   1. cwd 就是一个仓、且路径在它里面 → 这个仓。必须优先：monorepo 子包里也有 package.json，
+ *      从文件往上找会停在子包，把公共层配置读丢
+ *   2. 从路径往上找 `.git` → 那个仓（多仓工作区、或改的是兄弟仓的文件）
+ *   3. 再退一步找其它锚点（没有 git 的目录）
+ * 相对路径按 cwd 解析 —— 宿主给的相对路径就是相对会话 cwd 的。
+ */
+export function repoForPath(cwd: string, raw: string): string | null {
+  const s = (raw ?? '').trim();
+  if (!s) return null;
+  const abs = realpathOrSelf(path.isAbsolute(s) ? s : path.resolve(cwd, s));
+  const inside = (root: string): boolean => {
+    const rel = path.relative(realpathOrSelf(root), abs);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  };
+
+  if (!childRepos(cwd).length) {
+    const own = findRepoRootStrict(cwd);
+    if (own && inside(own)) return own;
+  }
+  return gitAncestor(path.dirname(abs)) ?? findRepoRootStrict(path.dirname(abs));
+}
+
 /**
  * 仓库的稳定标识。用来给**存在仓库外面**的状态加上仓库维度。
  *

@@ -39,7 +39,7 @@ deerclaw 支持接入多仓，是因为它有服务端把 N 个仓的图谱都�
 | 形态 | 现在的实际行为 |
 |---|---|
 | **monorepo**（一仓多包） | 基本能跑，但有个坑：`ROOT_ANCHORS` 把 `package.json` 也算锚点，在 `packages/foo` 里跑会停在**子包**而不是仓根，图谱范围被悄悄截断（见 1.3） |
-| **多根工作区**（父目录下挂 repo-a / repo-b） | 不会崩，但会**静默当成一个大仓**（见 1.3） |
+| **多根工作区**（父目录下挂 repo-a / repo-b） | 钩子已按被改文件定位仓（见 1.5）；CLI / repo-guard MCP 仍按 cwd，会**当成一个大仓**（见 1.3） |
 | **跨仓影响面**（改 A 仓接口，炸 B 仓调用方） | 完全做不到。这是 deerclaw 多仓的真正价值所在，见第 4 节 |
 
 ### 1.3 两个已经存在的行为（不是崩，是静默地不对）
@@ -77,6 +77,21 @@ deerclaw 支持接入多仓，是因为它有服务端把 N 个仓的图谱都�
 把仓前缀去掉，G3 立刻从 deny 变 allow。
 
 **函数签名本身就是这份划分的文档：带 `repoDir` 参数的是仓级状态，不带的是会话级。**
+
+### 1.5 已经修掉的第二处：多根工作区下钩子按文件定位仓
+
+上面 1.3 ② 说的"配置只认父目录那份"在**钩子**侧已经修掉（CLI 与 repo-guard 自己的 MCP 仍按 cwd）：
+
+| 钩子 | 怎么定位仓 | 代码 |
+|---|---|---|
+| pre-write / post-write / post-fail | **被改文件**往上找 `.git`；cwd 本身是仓且文件在仓内时优先用 cwd（monorepo 子包的 `package.json` 不截断） | `repoForPath`（`paths.ts`） |
+| SessionStart / PostCompact | cwd 下一层带 `.git` 的子仓逐仓分段注入；cwd 是仓时输出与原来逐字节相同 | `sessionRepos` / `childRepos` |
+| 提问 / Stop / SessionEnd | 同上逐仓判，同一段文字只出一次 | `reposOf` |
+| pre-bash / post-bash | 认命令开头的 `cd <目录> &&`；命令里每个路径各找各的仓 | `bashCwd` |
+| post-atlas（查过影响面） | 目标带仓 id（`backend:x.go#F`、`repo` 参数）→ 向 `atlas list` 要路径；给文件 → 按 cwd 解析，解析不到时只有一个子仓有该文件才记；只给符号 → atlas 解析出的每个目标各记各的仓 | `trackImpact`（`hooks/atlas-track.ts`） |
+
+两个子仓都有同名公共层文件、查询又没指明仓时**宁可不记**（E-M10），与 G3 同一方向：只允许多拦，不允许漏拦。
+回归用例在 `bin/verify-hooks.mjs` 阶段 E（13 条）；用改造前的产物跑，其中 7 条失败。
 
 | 会话级（不带 repoDir） | 为什么 |
 |---|---|

@@ -194,7 +194,7 @@ node bin/verify-hooks.mjs   # 83 条钩子回归，确认填的红线没把正�
 | `layers/skills/standards/` | 五端研发规范标准模板（全局层），`src/standards/` 是它的加载与合并 |
 
 完整构建说明见 [`docs/BUILD.md`](docs/BUILD.md)，设计与控制点映射见 [`docs/DESIGN.md`](docs/DESIGN.md)，
-多仓演进（当前只守一个仓）见 [`docs/MULTI-REPO.md`](docs/MULTI-REPO.md)。
+多仓：从放着几个仓的父目录打开会话时，钩子按被改文件所在仓的配置判（CLI 仍按 cwd），见 [`docs/MULTI-REPO.md`](docs/MULTI-REPO.md)。
 
 ---
 

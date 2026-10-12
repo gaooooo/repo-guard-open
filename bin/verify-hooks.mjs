@@ -15,6 +15,7 @@
  *                    一道门"默认关"但仍改变了输出，等于所有人被迫升级
  *
  *   D 写后比对（3 条）需要 atlas：similar 计划经 post-atlas 记进会话，Stop 调 atlas conform
+ *   E 多仓工作区（13 条）会话 cwd 是放着几个仓的父目录：按被改文件找仓，查询按仓记
  *
  * 用法：node verify-hooks.mjs [--tool <引擎路径>] [--atlas <bin/atlas>] [--keep] [--only <阶段>]
  * 自建一个临时 git 仓库当被测对象，不碰任何真实仓库。
@@ -651,6 +652,81 @@ add('D2', '比对结论里点名跳过了逻辑层', 'yes',
 add('D3', '同一结论每会话只说一次 → 第二次 Stop 放行', 'allow',
   needAtlas(() => hook('stop', { cwd: REPO3, session_id: D })));
 
+// ══════════════════ 阶段 E · 多仓工作区（会话 cwd 是父目录）══════════════════
+//
+// 多仓团队把前端、后端放在同一个父目录下、从父目录打开会话。父目录不是仓：
+// 必须按**被改文件**找仓、按那个仓的配置判，否则守卫整个失效。
+// 两个仓都有 src/shared/util.ts（都是公共层）：没指明仓的查询不许跨仓放行（同 G3）。
+
+phase = 'E';
+const WS = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-guard-ws-'));
+function wws(rel, body) {
+  const f = path.join(WS, rel);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, body);
+}
+const facts = (publicLayer) => JSON.stringify({ version: 1, analyzer: null, publicLayer, componentLibrary: null, lineLimit: 500, generatedAt: new Date().toISOString() });
+for (const r of ['fe', 'be']) {
+  fs.mkdirSync(path.join(WS, r), { recursive: true });
+  spawnSync('git', ['init', '-q', '.'], { cwd: path.join(WS, r) });
+}
+wws('fe/src/components/Btn.tsx', 'export const Btn = 1;\n');
+wws('fe/src/components/Card.tsx', 'export const Card = 1;\n');
+wws('fe/src/shared/util.ts', 'export const u = 1;\n');
+wws('fe/.codebuddy/repo-facts.json', facts(['src/components/', 'src/shared/']));
+wws('be/go.mod', 'module example.com/be\n\ngo 1.22\n');
+wws('be/service/validator.go', 'package service\n\nfunc validateTenant() error { return nil }\n\nfunc Use() error { return validateTenant() }\n');
+wws('be/service/other.go', 'package service\n\nfunc Other() {}\n');
+wws('be/src/shared/util.ts', 'export const u = 2;\n');
+wws('be/.codebuddy/repo-facts.json', facts(['service/', 'src/shared/']));
+wws('notes.md', '# 工作区说明\n');
+if (HAS_ATLAS) {
+  for (const r of ['fe', 'be']) {
+    spawnSync(process.execPath, [ATLAS_BIN, 'add', path.join(WS, r), '--id', r], { cwd: WS, encoding: 'utf-8', env: { ...process.env, ATLAS_HOME } });
+  }
+}
+const wsHook = (name, sid, extra) => hook(name, { cwd: WS, session_id: sid, ...extra });
+const wsWrite = (sid, file) => wsHook('pre-write', sid, { tool_name: 'Edit', tool_input: { file_path: file } });
+const wsAtlas = (sid, toolInput) => atlasCall(sid, 'atlas_impact', toolInput, { cwd: WS });
+
+add('E-M1', 'SessionStart：逐仓注入两个仓的公共层', 'yes', (() => {
+  const r = wsHook('session-start', 'ws-start', { source: 'startup' });
+  const ok = /多仓工作区/.test(r.reason) && /### be/.test(r.reason) && /### fe/.test(r.reason) && !/本仓还没跑过/.test(r.reason);
+  return { verdict: ok ? 'yes' : 'no', reason: r.reason };
+})());
+add('E-M2', '父目录下写子仓公共层（相对路径），未查 → 拦', 'deny', wsWrite('ws-a', 'fe/src/components/Btn.tsx'));
+add('E-M3', '同上，绝对路径 → 拦', 'deny', wsWrite('ws-a', path.join(WS, 'be/service/validator.go')));
+add('E-M4', '子仓非公共层 / 父目录自身的文件 → 放行', 'allow', (() => {
+  const a = wsWrite('ws-a', 'fe/src/views/new.tsx');
+  return a.verdict === 'allow' ? wsWrite('ws-a', 'notes.md') : a;
+})());
+wsAtlas('ws-b', { target: 'fe/src/components/Btn.tsx' });
+add('E-M5', 'atlas_impact 给「子仓/文件」→ 放行该文件', 'allow', wsWrite('ws-b', 'fe/src/components/Btn.tsx'));
+add('E-M6', '查过 fe 的文件不放行 be 的文件', 'deny', wsWrite('ws-b', 'be/service/validator.go'));
+add('E-M7', 'atlas_impact 用 repo 参数指定仓 → 放行', 'allow',
+  needAtlas(() => {
+    wsAtlas('ws-c', { target: 'src/components/Card.tsx', repo: 'fe' });
+    return wsWrite('ws-c', 'fe/src/components/Card.tsx');
+  }));
+add('E-M8', 'atlas_impact 带「仓id:」前缀 → 放行', 'allow',
+  needAtlas(() => {
+    wsAtlas('ws-d', { target: 'be:service/validator.go#validateTenant' });
+    return wsWrite('ws-d', 'be/service/validator.go');
+  }));
+add('E-M9', 'atlas_impact 只给符号 → atlas 解析到 be → 放行', 'allow',
+  needAtlas(() => {
+    wsAtlas('ws-e', { target: 'validateTenant' });
+    return wsWrite('ws-e', 'be/service/validator.go');
+  }));
+wsAtlas('ws-f', { target: 'src/shared/util.ts' });
+add('E-M10', '两个子仓都有的同名文件、没指明仓 → 不放行', 'deny', wsWrite('ws-f', 'fe/src/shared/util.ts'));
+wsHook('post-bash', 'ws-g', { tool_name: 'Bash', tool_input: { command: 'cd be && atlas impact service/other.go' }, tool_response: { exitCode: 0 } });
+add('E-M11', '终端里 cd 子仓再 atlas impact → 放行', 'allow', wsWrite('ws-g', 'be/service/other.go'));
+add('E-M12', '父目录下用 shell 写子仓公共层 → 提醒', 'context',
+  wsHook('pre-bash', 'ws-h', { tool_input: { command: 'sed -i s/a/b/ fe/src/components/Btn.tsx' } }));
+add('E-M13', '会话在 fe 仓里、改兄弟仓 be 的公共层 → 按 be 的配置拦', 'deny',
+  hook('pre-write', { cwd: path.join(WS, 'fe'), session_id: 'ws-i', tool_input: { file_path: '../be/service/validator.go' } }));
+
 // ───────────── 报告 ─────────────
 
 const rows = cases
@@ -664,6 +740,7 @@ const PHASE_LABEL = {
   B: '阶段 B · 七道门',
   C: '阶段 C · 删掉 guard，验零行为变化',
   D: '阶段 D · code-atlas 写后比对',
+  E: '阶段 E · 多仓工作区',
 };
 
 console.log(`\n钩子回归矩阵 · ${pass}/${rows.length} 通过${skipped ? `（其中 ${skipped} 条因没有 atlas 跳过）` : ''}\n`);
@@ -702,6 +779,7 @@ if (!KEEP) {
   fs.rmSync(HOME, { recursive: true, force: true });
   fs.rmSync(ATLAS_HOME, { recursive: true, force: true });
   fs.rmSync(REPO3, { recursive: true, force: true });
+  fs.rmSync(WS, { recursive: true, force: true });
 } else {
   console.log(`\n临时仓库保留在 ${REPO}\n第二个仓库保留在 ${REPO2}\nHOME 保留在 ${HOME}`);
 }

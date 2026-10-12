@@ -751,8 +751,8 @@ REPO_GUARD_DEBUG / DEBUG                   调试开关
 - 不改用户的 lint 配置 —— `init` 只把建议片段打出来让人自己贴。
 - 不替宿主做权限与沙箱。
 - 不把图谱进 git。
-- **当前只守一个仓**。多仓（一个会话挂多个仓、微服务之间的跨仓影响面）
-  的边界、演进支点与落地分级见 [MULTI-REPO.md](./MULTI-REPO.md)。
+- **钩子按仓守，CLI 仍按 cwd**。从多仓父目录打开会话时钩子按被改文件找仓；跨仓影响面由 code-atlas 提供。
+  边界与落地分级见 [MULTI-REPO.md](./MULTI-REPO.md)。
 
 ### 9.3 关键决策记录
 
@@ -777,7 +777,7 @@ REPO_GUARD_DEBUG / DEBUG                   调试开关
 | P3 | 全控制点骨架 + `.codebuddy/guard/` 配置 | `plugin validate` 通过、空配置零行为变化 | ✅ |
 | P4 | 七道门接进运行时 | 每道门有独立用例，且阶段 C 证明零行为变化 | ✅ |
 | P5 | 真机验证 + 治理总览 + 分发物料 | `--plugin-dir` 端到端跑通 | ✅ |
-| P6 | 多仓（设计） | 见 [MULTI-REPO.md](./MULTI-REPO.md)。已落地的只有会话状态的仓库维度（G3 用例钉住），其余待排 | 📋 |
+| P6 | 多仓 | 见 [MULTI-REPO.md](./MULTI-REPO.md)。已落地：会话状态的仓库维度（G3）、钩子按被改文件定位仓（阶段 E 13 条）；CLI / MCP 待排 | 🚧 |
 
 **当前验收状态**
 

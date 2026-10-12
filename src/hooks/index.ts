@@ -32,7 +32,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { findRepoRoot, toRepoRelative } from '../runtime/paths.js';
+import { findRepoRoot, repoForPath, sessionRepos, toRepoRelative } from '../runtime/paths.js';
 import { countLines, readFacts, type RepoFacts } from '../runtime/repo-facts.js';
 import { loadRedlines } from '../runtime/redlines.js';
 import { judge, denyReason, shouldBlock } from '../runtime/guard.js';
@@ -166,8 +166,58 @@ function writeTarget(input: HookInput): string | null {
   return null;
 }
 
+function cwdOf(input: HookInput): string {
+  return input.cwd && input.cwd.trim() ? input.cwd : process.cwd();
+}
+
+/** cwd 所在的仓。多仓工作区（cwd 是父目录）时就是父目录本身，只用于会话绑定与兜底 */
 function repoOf(input: HookInput): string {
-  return findRepoRoot(input.cwd && input.cwd.trim() ? input.cwd : process.cwd());
+  return findRepoRoot(cwdOf(input));
+}
+
+/**
+ * 会话涉及的仓：多仓工作区 → 全部子仓；否则 → cwd 所在仓（与原来一致）。
+ * 给 SessionStart / 提问 / Stop 这些不针对具体文件的钩子用。
+ */
+function reposOf(input: HookInput): string[] {
+  return sessionRepos(cwdOf(input));
+}
+
+/**
+ * 写类钩子的目标：被改文件所在的仓 + 绝对路径。
+ *
+ * 必须按文件定位，不能按 cwd：多仓团队从父目录打开会话时，cwd 不是任何一个仓，
+ * 按 cwd 找仓会读不到配置，守卫整个失效；改兄弟仓的文件同理。
+ * 返回 null = 文件不在任何仓里（T2：仓库外路径一律放行）。
+ */
+function fileTarget(input: HookInput, raw: string): { repoDir: string; abs: string } | null {
+  const cwd = cwdOf(input);
+  const repoDir = repoForPath(cwd, raw);
+  if (!repoDir) return null;
+  return { repoDir, abs: path.isAbsolute(raw) ? raw : path.resolve(cwd, raw) };
+}
+
+/** 多仓工作区里给每段输出标上是哪个仓 */
+function repoLabel(input: HookInput, repoDir: string): string {
+  const rel = path.relative(cwdOf(input), repoDir);
+  return rel && !rel.startsWith('..') ? rel : path.basename(repoDir);
+}
+
+/**
+ * Bash 实际在哪个目录跑：认开头的 `cd <目录> &&` / `cd <目录>;`。
+ * 多仓工作区里 AI 常写 `cd backend && go build ./...`，不认的话命令里的相对路径全按父目录解析。
+ */
+function bashCwd(input: HookInput, cmd: string): string {
+  const cwd = cwdOf(input);
+  const m = cmd.match(/^\s*cd\s+("([^"]+)"|'([^']+)'|([^\s;&|]+))\s*(&&|;)/);
+  if (!m) return cwd;
+  const dir = (m[2] ?? m[3] ?? m[4] ?? '').replace(/^~(?=\/|$)/, process.env.HOME ?? '~');
+  const abs = path.resolve(cwd, dir);
+  try {
+    return fs.statSync(abs).isDirectory() ? abs : cwd;
+  } catch {
+    return cwd;
+  }
 }
 
 /** 工具这次成功了吗。拿不到明确信号时按成功算（否则会把连续失败计数打飘） */
@@ -202,30 +252,49 @@ function standardsOf(repoDir: string, facts: RepoFacts | null): StandardsSnapsho
  * 那比没装更危险。这条是 verify-hooks 的 F2 用例。
  */
 function sessionStart(input: HookInput): void {
-  const repoDir = repoOf(input);
-  const facts = readFacts(repoDir);
-  record('session_start', repoDir);
-
-  const std = injectSegment(standardsOf(repoDir, facts), 'session_start');
   // 图谱由 code-atlas 提供。没装时守卫本身照常（判据是会话状态），但 AI 查不了影响面，
   // 被拦之后无路可走 —— 必须明说，不能沉默（同 F2 的理由）。不阻塞
   const atlasNote = atlasAvailable()
     ? ''
     : '图谱相关守卫未生效：没找到 code-atlas（atlas 命令）。请安装 code-atlas（npm i -g code-atlas）后重开会话；在此之前查不了影响面 / 同类实现。';
 
+  const repos = reposOf(input);
+  if (repos.length === 1) {
+    const all = [startSection(repos[0], atlasNote)].filter(Boolean).join('\n\n');
+    if (all) emitContext('SessionStart', all);
+    return;
+  }
+  // 多仓工作区：逐仓注入，atlas 提示只说一次
+  const parts = [multiRepoHead(input, repos)];
+  for (const r of repos) parts.push(`### ${repoLabel(input, r)}\n${startSection(r, '')}`);
+  if (atlasNote) parts.push(atlasNote);
+  emitContext('SessionStart', parts.join('\n\n'));
+}
+
+function multiRepoHead(input: HookInput, repos: string[]): string {
+  return (
+    `当前目录是多仓工作区，含 ${repos.length} 个仓：${repos.map((r) => repoLabel(input, r)).join('、')}。` +
+    '下面按仓分段；改哪个仓的文件，就按哪个仓的规则判。'
+  );
+}
+
+/** 单个仓的 SessionStart 段。单仓时输出与改造前逐字节相同 */
+function startSection(repoDir: string, atlasNote: string): string {
+  const facts = readFacts(repoDir);
+  record('session_start', repoDir);
+  const std = injectSegment(standardsOf(repoDir, facts), 'session_start');
+
   if (!facts) {
     // 规范可能铺了但 repo-facts 没跑过 —— 两件事互相独立，各说各的
     const head = '本仓还没跑过 repo-guard init —— 公共层与红线都未配置，写前守卫不会生效。';
-    emitContext('SessionStart', [head, atlasNote, std].filter(Boolean).join('\n\n'));
-    return;
+    return [head, atlasNote, std].filter(Boolean).join('\n\n');
   }
 
   // guard 配置不存在时 buildInjection 只产出公共层那一段，
   // 与接入 L0 之前的输出逐字节相同 —— 铁律 ④
   const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
   const factNote = '工程事实长文见仓库根 CODEBUDDY.md（本段只注机器摘要）。';
-  const all = [text, factNote, atlasNote, std].filter(Boolean).join('\n\n');
-  if (all) emitContext('SessionStart', all);
+  return [text, factNote, atlasNote, std].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -235,16 +304,26 @@ function sessionStart(input: HookInput): void {
  * 模型就不知道哪些目录是公共层了 —— 而守卫还在拦，于是它会觉得工具行为随机。
  */
 function postCompact(input: HookInput): void {
-  const repoDir = repoOf(input);
-  const facts = readFacts(repoDir);
-  const std = injectSegment(standardsOf(repoDir, facts), 'post_compact');
-  if (!facts) {
-    if (std) emitContext('PostCompact', `（上下文压缩后重新注入）\n${std}`);
+  const repos = reposOf(input);
+  if (repos.length === 1) {
+    const all = compactSection(repos[0]);
+    if (all) emitContext('PostCompact', `（上下文压缩后重新注入）\n${all}`);
     return;
   }
+  const parts = repos.map((r) => [r, compactSection(r)] as const).filter(([, t]) => t);
+  if (!parts.length) return;
+  emitContext(
+    'PostCompact',
+    `（上下文压缩后重新注入）\n${multiRepoHead(input, repos)}\n\n${parts.map(([r, t]) => `### ${repoLabel(input, r)}\n${t}`).join('\n\n')}`,
+  );
+}
+
+function compactSection(repoDir: string): string {
+  const facts = readFacts(repoDir);
+  const std = injectSegment(standardsOf(repoDir, facts), 'post_compact');
+  if (!facts) return std;
   const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
-  const all = [text, std].filter(Boolean).join('\n\n');
-  if (all) emitContext('PostCompact', `（上下文压缩后重新注入）\n${all}`);
+  return [text, std].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -254,19 +333,21 @@ function postCompact(input: HookInput): void {
  * 代价远大于任何收益。
  */
 function userPromptSubmit(input: HookInput): void {
-  const repoDir = repoOf(input);
-  const cfg = loadGuardConfig(repoDir);
   const prompt = typeof input.prompt === 'string' ? input.prompt : '';
-
+  // 多仓工作区：各仓的路由 / 规范 / 提示合在一起，同一段只出一次（各仓常用同一套模板）
   const parts: string[] = [];
-  const routed = matchTaskRoutes(cfg, prompt);
-  if (routed) parts.push(routed);
-  const std = promptSegment(standardsOf(repoDir, readFacts(repoDir)), prompt);
-  if (std) parts.push(std);
-  const hint = featureHint(cfg, prompt);
-  if (hint) {
-    parts.push(hint);
-    record('feature_hint', repoDir);
+  const push = (t: string | null | undefined) => {
+    if (t && !parts.includes(t)) parts.push(t);
+  };
+  for (const repoDir of reposOf(input)) {
+    const cfg = loadGuardConfig(repoDir);
+    push(matchTaskRoutes(cfg, prompt));
+    push(promptSegment(standardsOf(repoDir, readFacts(repoDir)), prompt));
+    const hint = featureHint(cfg, prompt);
+    if (hint) {
+      push(hint);
+      record('feature_hint', repoDir);
+    }
   }
 
   if (parts.length) emitContext('UserPromptSubmit', parts.join('\n\n'));
@@ -287,7 +368,10 @@ function preWrite(input: HookInput): void {
   const raw = writeTarget(input);
   if (!raw) return; // 拿不到路径：不管（E2 用例）
 
-  const repoDir = repoOf(input);
+  // 按被改文件定位仓：多仓工作区、改兄弟仓的文件都要按文件所在仓的配置判
+  const target = fileTarget(input, raw);
+  if (!target) return; // 不在任何仓里：不管（T2 用例）
+  const { repoDir, abs } = target;
   const facts = readFacts(repoDir);
   const cfg = loadGuardConfig(repoDir);
   const std = standardsOf(repoDir, facts);
@@ -297,7 +381,7 @@ function preWrite(input: HookInput): void {
   // 所以这里不能直接 return —— 除非三者都没配。
   if (!facts && !cfg.present && !stdRules.length) return; // F1 用例：完全未配置 → fail-open
 
-  const rel = toRepoRelative(repoDir, raw);
+  const rel = toRepoRelative(repoDir, abs);
   if (!rel) return; // 仓库外：不管（T2 用例）
 
   // ① L3 循环门
@@ -355,7 +439,7 @@ function preWrite(input: HookInput): void {
   // `impact` 去搜工具名会搜不到，然后判定"工具不存在"改用 grep 凑影响面。
   // 让 standards 那份较简的文案抢在前面，等于把这个调优成果丢掉。
   if (facts) {
-    const v = judge(repoDir, facts, snapshot, raw);
+    const v = judge(repoDir, facts, snapshot, abs);
     if (v && shouldBlock(v)) {
       record('guard_deny', repoDir, { file: v.rel, rule: v.rules[0]?.id, detail: input.tool_name });
       emitDeny('PreToolUse', denyReason(v));
@@ -412,39 +496,53 @@ function preBash(input: HookInput): void {
   const cmd = input.tool_input?.command;
   if (typeof cmd !== 'string' || !cmd.trim()) return;
 
-  const repoDir = repoOf(input);
-  const facts = readFacts(repoDir);
-  const cfg = loadGuardConfig(repoDir);
+  const cwd = bashCwd(input, cmd);
+  const repos = sessionRepos(cwd);
 
   // 工程校验证据要在**执行之前**就记下 —— PostToolUse 拿不到命令原文
-  noteEvidence(cfg, cmd);
+  for (const repoDir of repos) noteEvidence(loadGuardConfig(repoDir), cmd);
 
-  if (!facts) return;
-
-  // L3 循环门也管 bash：同一条命令重复跑 3 次基本都是卡住了
-  const loop = judgeLoop(repoDir, cfg, 'Bash', input.tool_input, null);
-  if (loop.blocked) {
-    record('loop_deny', repoDir, { detail: loop.kind });
-    emitDeny('PreToolUse', loop.reason!);
-    return;
+  // L3 循环门也管 bash：同一条命令重复跑 3 次基本都是卡住了。只在配了 repo-facts 的仓上判
+  for (const repoDir of repos) {
+    if (!readFacts(repoDir)) continue;
+    const loop = judgeLoop(repoDir, loadGuardConfig(repoDir), 'Bash', input.tool_input, null);
+    if (loop.blocked) {
+      record('loop_deny', repoDir, { detail: loop.kind });
+      emitDeny('PreToolUse', loop.reason!);
+      return;
+    }
   }
 
   if (!SHELL_WRITE_PATTERNS.some((re) => re.test(cmd))) return;
 
-  const hits = new Set<string>();
+  // 命令里的每个路径各自找所在仓、各按各的公共层判
+  const hits = new Map<string, Set<string>>();
+  const factsOf = new Map<string, RepoFacts | null>();
   for (const m of cmd.matchAll(/[\w./@-]*[\w-]+\.[A-Za-z][\w]*|[\w./@-]*\/[\w.-]+/g)) {
-    const rel = toRepoRelative(repoDir, m[0]);
+    const repoDir = repoForPath(cwd, m[0]);
+    if (!repoDir) continue;
+    if (!factsOf.has(repoDir)) factsOf.set(repoDir, readFacts(repoDir));
+    const facts = factsOf.get(repoDir);
+    if (!facts) continue;
+    const rel = toRepoRelative(repoDir, path.resolve(cwd, m[0]));
     if (!rel) continue;
     for (const p of facts.publicLayer.map((x) => (x.endsWith('/') ? x : `${x}/`))) {
-      if (rel.startsWith(p)) hits.add(p);
+      if (!rel.startsWith(p)) continue;
+      if (!hits.has(repoDir)) hits.set(repoDir, new Set());
+      hits.get(repoDir)!.add(p);
     }
   }
   if (!hits.size) return;
 
-  record('shell_bypass_warn', repoDir, { detail: [...hits].join(',') });
+  const multi = hits.size > 1 || repos.length > 1;
+  const shown: string[] = [];
+  for (const [repoDir, ps] of hits) {
+    record('shell_bypass_warn', repoDir, { detail: [...ps].join(',') });
+    for (const p of ps) shown.push(multi ? `${repoLabel(input, repoDir)}/${p}` : p);
+  }
   emitAllowWithNote(
     'PreToolUse',
-    `注意：这条命令看起来会用 shell 写入公共层（${[...hits].join('、')}）。` +
+    `注意：这条命令看起来会用 shell 写入公共层（${shown.join('、')}）。` +
       '绕开文件工具不会触发影响面检查 —— 如果确实要改公共层文件，请先查影响面。',
   );
 }
@@ -458,10 +556,11 @@ function preBash(input: HookInput): void {
  * 而仓里已经有约定了。
  */
 function postWrite(input: HookInput): void {
-  const repoDir = repoOf(input);
-  const cfg = loadGuardConfig(repoDir);
   const raw = writeTarget(input);
-  const rel = raw ? toRepoRelative(repoDir, raw) : null;
+  const target = raw ? fileTarget(input, raw) : null;
+  const repoDir = target?.repoDir ?? repoOf(input);
+  const cfg = loadGuardConfig(repoDir);
+  const rel = target ? toRepoRelative(repoDir, target.abs) : null;
 
   noteToolResult(repoDir, cfg, input.tool_name ?? 'Write', input.tool_input, rel, toolSucceeded(input));
 
@@ -511,11 +610,13 @@ function postWrite(input: HookInput): void {
  * 没有这一步，Bash 的成功就清不掉连续失败计数。
  */
 function postBash(input: HookInput): void {
-  const repoDir = repoOf(input);
+  const cmd = typeof input.tool_input?.command === 'string' ? input.tool_input.command : '';
+  const cwd = bashCwd(input, cmd);
+  // 循环计数是会话级的（按工具名 + 命令指纹），repoDir 只决定读哪份配置、埋点记到哪：取命令所在的第一个仓
+  const repoDir = sessionRepos(cwd)[0];
   noteToolResult(repoDir, loadGuardConfig(repoDir), input.tool_name ?? 'Bash', input.tool_input, null, toolSucceeded(input));
   // AI 在终端里跑了 atlas impact / similar / hot：和调 MCP 一样算「查过」
-  const cmd = input.tool_input?.command;
-  if (typeof cmd === 'string' && /\batlas\s+(impact|similar|hot)\b/.test(cmd)) trackAtlasBash(repoDir, cmd);
+  if (/\batlas\s+(impact|similar|hot)\b/.test(cmd)) trackAtlasBash(cwd, cmd);
 }
 
 /**
@@ -526,15 +627,15 @@ function postBash(input: HookInput): void {
 function postAtlas(input: HookInput): void {
   const name = input.tool_name ?? '';
   if (!name.startsWith('mcp__code-atlas__')) return;
-  trackAtlasTool(repoOf(input), name, (input.tool_input ?? {}) as Record<string, unknown>);
+  trackAtlasTool(cwdOf(input), name, (input.tool_input ?? {}) as Record<string, unknown>);
 }
 
 function postFail(input: HookInput): void {
-  const repoDir = repoOf(input);
-  const cfg = loadGuardConfig(repoDir);
   const raw = writeTarget(input);
-  const rel = raw ? toRepoRelative(repoDir, raw) : null;
-  noteToolResult(repoDir, cfg, input.tool_name ?? 'unknown', input.tool_input, rel, false);
+  const target = raw ? fileTarget(input, raw) : null;
+  const repoDir = target?.repoDir ?? repoOf(input);
+  const rel = target ? toRepoRelative(repoDir, target.abs) : null;
+  noteToolResult(repoDir, loadGuardConfig(repoDir), input.tool_name ?? 'unknown', input.tool_input, rel, false);
 }
 
 // ══════════════════ L5 交付门 / L4 诚实信号 ══════════════════
@@ -621,33 +722,47 @@ function hashText(s: string): string {
 }
 
 async function stop(input: HookInput): Promise<void> {
-  const repoDir = repoOf(input);
-  const cfg = loadGuardConfig(repoDir);
-
-  let conf = { text: '', drift: false };
-  try {
-    conf = await conformNote(repoDir);
-  } catch {
-    /* 比对失败不能影响收尾 */
+  // 多仓工作区：逐仓比对、逐仓判交付门。交付门与迭代提示按会话计数、按原因去重，
+  // 所以几个仓都开着同一道门也只说一次
+  const confTexts: string[] = [];
+  const blockNotes: string[] = [];
+  const notes: string[] = [];
+  let drift = false;
+  const push = (arr: string[], t: string) => {
+    if (t && !arr.includes(t)) arr.push(t);
+  };
+  for (const repoDir of reposOf(input)) {
+    const cfg = loadGuardConfig(repoDir);
+    let conf = { text: '', drift: false };
+    try {
+      conf = await conformNote(repoDir);
+    } catch {
+      /* 比对失败不能影响收尾 */
+    }
+    if (conf.drift) drift = true;
+    push(confTexts, conf.text);
+    const d = judgeDelivery(cfg, repoDir);
+    if (d.block) push(blockNotes, d.note);
+    else push(notes, d.note);
+    push(notes, iterationNote(cfg));
   }
 
-  const d = judgeDelivery(cfg, repoDir);
   // 写后比对有偏差：阻止停止，让 AI 照参考改（或说明为什么不照）。只放 additionalContext 的话，
   // 宿主在 Stop 上不会再给模型一轮，结论就只落在埋点里、代码不会变
-  if (d.block || conf.drift) {
-    emitContinue([d.block ? d.note : '', conf.text].filter(Boolean).join('\n\n'));
+  if (blockNotes.length || drift) {
+    emitContinue([...blockNotes, ...confTexts].join('\n\n'));
     return;
   }
 
-  const notes = [d.note, iterationNote(cfg), conf.text].filter(Boolean);
-  if (notes.length) emitContext('Stop', notes.join('\n\n'));
+  const all = [...notes, ...confTexts];
+  if (all.length) emitContext('Stop', all.join('\n\n'));
 }
 
 function sessionEnd(input: HookInput): void {
-  const repoDir = repoOf(input);
-  const cfg = loadGuardConfig(repoDir);
-  recordFinalSignal(cfg, repoDir);
-  record('session_end', repoDir);
+  for (const repoDir of reposOf(input)) {
+    recordFinalSignal(loadGuardConfig(repoDir), repoDir);
+    record('session_end', repoDir);
+  }
   // 会话状态是一次性的，顺手清掉过期的。失败无所谓
   sweepStaleSessions();
 }
@@ -662,6 +777,7 @@ export async function runHook(name: string): Promise<number> {
     setSessionId(input.session_id);
     // 让 MCP 进程（拿不到会话 id）能认领到这个会话，见 session-state 的 adoptSessionFor
     bindCurrentSession(repoOf(input));
+    for (const r of reposOf(input)) if (r !== repoOf(input)) bindCurrentSession(r);
     switch (name) {
       case 'session-start':
         sessionStart(input);
