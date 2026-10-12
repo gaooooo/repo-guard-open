@@ -11,8 +11,8 @@
 
 | 源码 | 是不是图谱 | 放哪 |
 |---|---|---|
-| `src/graph/**`（analyzers / builder / report） | 是 | 本仓 `src/graph/`，不另开仓 |
-| `src/runtime/graph-cache.ts` | 调用图谱 | hook 只读缓存，禁止建图 |
+| 图谱引擎（analyzers / builder / report / insight） | 是 | **已移交 code-atlas**，本仓不再有源码 |
+| `src/atlas/client.ts`、`src/hooks/atlas-track.ts` | 调用图谱 | 子进程调 `atlas … --json`；hook 只用 `--cache-only`，禁止建图 |
 | `src/engine/policy-engine.ts`、`policy-audit.ts`、扫描器 | 否，红线判定 | **留在 plugin** `src/engine/` |
 | `src/gates/`、`hooks/`、`standards/`、`cli/`、`mcp/` | 否，控制面接线 | **留在 plugin** |
 
@@ -40,7 +40,7 @@ CodeBuddy 控制点             T3 CODEBUDDY.md / T6 rules / T7 hook / 宿主 / 
 | 4 过程门禁 | `layers/process-gates/` | T7a deny / T7e remind / T10 提醒 | 公共层守卫已开，其余默认关 |
 | 5 人审 | `layers/human-review/` + `facts.json` 的 `stopConditions` | T4 注入「何时问人」（自觉）；T7b 红线命中后 ask | 硬开关默认关 |
 | 6 合并门禁 | `layers/merge-gates/` | **非 ReAct**：工程侧 CI / pre-commit；Agent 侧宿主 permissions.ask | 插件不能强制，只给片段 |
-| 7 图谱 | `layers/graph/`（说明）+ `src/graph/`（引擎） | T2 MCP；T7d 调用；T7a require_tool | 拉 + 可硬 |
+| 7 图谱 | `layers/graph/`（说明）+ code-atlas（引擎） | T2 MCP；T7d 调用；T7a require_tool | 拉 + 可硬 |
 
 ## 和旧「七道门 L0–L6」的关系
 

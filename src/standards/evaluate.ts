@@ -403,6 +403,15 @@ export interface RequireToolVerdict {
  * 判定函数保持纯粹 —— 会话状态由调用方读，这样它可单测、也不会在 hook 的
  * 关键路径上重复读状态文件。
  */
+/** 规范里的工具名 → AI 实际能调的工具（图谱工具由 code-atlas 的 MCP 提供） */
+const TOOL_LABEL: Record<string, string> = {
+  impact: 'code-atlas 的 atlas_impact 工具（target=文件路径）',
+  similar: 'code-atlas 的 atlas_reuse 工具（kind=similar）',
+  hot: 'code-atlas 的 atlas_reuse 工具（intent=要写什么）',
+  trace: 'code-atlas 的 atlas_trace 工具',
+  lib_search: 'lib_search 工具',
+};
+
 export function judgeRequireTool(
   snap: StandardsSnapshot,
   rel: string,
@@ -431,7 +440,7 @@ export function judgeRequireTool(
     const lines = [
       `这次改动命中规范 ${item.id}：${item.title}`,
       item.body,
-      `按规范要求，动手之前必须先调 ${tool} 工具。`,
+      `按规范要求，动手之前必须先调 ${TOOL_LABEL[tool]}。`,
     ];
     if (item.hint) lines.push(item.hint);
     lines.push('（本约束来自 .codebuddy/standards/，不要绕过它 —— 确实该改就先更新那份配置。）');

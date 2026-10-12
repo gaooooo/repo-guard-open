@@ -11,7 +11,7 @@
     "── timeout 单位是秒 ──",
     "宿主实现是 `(timeout ?? 60) * 1000`，默认 60 秒。",
     "内部市场有插件写 120000（以为是毫秒），那等于 33 小时，相当于没有超时。",
-    "这里的预算按『钩子里只读缓存、永不建图』来定：写前判定 15 秒，其余 5 秒。",
+    "这里的预算按『钩子里只读缓存、永不建图』来定：写前判定 15 秒，其余 5 秒（图谱查 atlas --cache-only）。",
     "",
     "── matcher 必须同时覆盖两套工具名 ──",
     "CLI 形态的工具叫 Write / Edit / MultiEdit / NotebookEdit；",
@@ -99,9 +99,21 @@
         "hooks": [
           {
             "type": "command",
-            "description": "L3 计数器（命令）",
+            "description": "L3 计数器（命令）+ 识别终端里的 atlas impact/similar/hot",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-bash",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "_": "图谱查询留痕：AI 调了 code-atlas 的 atlas_impact / atlas_reuse / atlas_trace 之后，把「查过哪个文件 / 查过同类实现 / 查过热点」记进会话状态 —— 写前守卫放行的依据。图谱由 code-atlas 的 MCP 提供，repo-guard 看不到它的进程内部，只能在这里记。钩子里禁止建图：需要向 atlas 要数据时一律 --cache-only，失败放行。只写状态，不输出任何东西。",
+        "matcher": "mcp__code-atlas__atlas_impact|mcp__code-atlas__atlas_reuse|mcp__code-atlas__atlas_trace",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "记录 atlas 图谱查询（会话状态 + 埋点）",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-atlas",
+            "timeout": 10
           }
         ]
       }
@@ -216,7 +228,7 @@
 
     "FileChanged": [
       {
-        "_": "待补充 · matcher 填要监视的文件名。打算监视 .codebuddy/repo-facts.json 与 redlines.json —— 人改完配置立刻失效图谱缓存并重注入，省掉『改完要重开会话』这一步。",
+        "_": "待补充 · matcher 填要监视的文件名。打算监视 .codebuddy/repo-facts.json 与 redlines.json —— 人改完配置立刻重注入，省掉『改完要重开会话』这一步。",
         "matcher": "repo-facts.json|redlines.json",
         "hooks": []
       }
@@ -252,7 +264,7 @@
 
     "WorktreeCreate": [
       {
-        "_": "待补充 · 新工作树里没有图谱缓存。可以在这里预热，但注意：预热是建图，耗时可能几十秒，不能阻塞。",
+        "_": "待补充 · 新工作树不在 code-atlas 工作区里。可以在这里后台 atlas add 预热，但注意：建索引耗时可能几十秒，不能阻塞。",
         "hooks": []
       }
     ],
@@ -295,7 +307,7 @@
 
     "Setup": [
       {
-        "_": "待补充 · 插件安装/启用时跑一次。⚠️ 这个事件**不在官方文档的事件清单里**，但宿主实现里有，内部市场的 bugbot 用它装 CLI。repo-guard 的引擎已经打包进 bin/，不需要安装步骤，所以留空。将来若要做『首次启用时自动跑一次 init（只报告不写）』，挂这里。",
+        "_": "待补充 · 插件安装/启用时跑一次。⚠️ 这个事件**不在官方文档的事件清单里**，但宿主实现里有，内部市场的 bugbot 用它装 CLI。repo-guard 自身已打包进 bin/；图谱依赖的 code-atlas 需用户自行 npm i -g code-atlas（SessionStart 会提示），所以留空。将来若要做『首次启用时自动跑一次 init（只报告不写）』，挂这里。",
         "hooks": []
       }
     ]

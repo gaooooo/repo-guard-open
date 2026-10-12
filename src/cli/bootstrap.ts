@@ -12,7 +12,7 @@ import { readFacts } from '../runtime/repo-facts.js';
 import { runLayersInit } from './layers-init.js';
 import { runRedlinesInit } from './redlines.js';
 import { runStandardsInit } from './standards.js';
-import { RULE } from './render.js';
+import { RULE } from './text.js';
 import { buildFactsFromRepo } from './facts-from-repo.js';
 
 export interface BootstrapResult {

@@ -4,7 +4,7 @@
 
 它是代码的投影，删了重跑结果一样，所以缓存不进 git。红线才是人写的意图。
 
-源码在本仓 `src/graph/`，不另开仓。红线引擎不在这里（`src/engine/`）。作者面说明在 `layers/graph/`，只写「何时必须查」，不存规范原文。
+**图谱由 code-atlas 提供（atlas CLI + MCP，`npm i -g code-atlas`），repo-guard 不再自带引擎。** 本仓只留调用客户端 `src/atlas/` 与查询留痕钩子 `post-atlas`。红线引擎不在这里（`src/engine/`）。作者面说明在 `layers/graph/`，只写「何时必须查」，不存规范原文。
 
 WorkBuddy 接入、与开源 CodeGraph 的分工、多仓契约索引：见 [`GRAPH-MULTI-REPO-SCHEME.md`](GRAPH-MULTI-REPO-SCHEME.md)。
 
@@ -12,7 +12,7 @@ WorkBuddy 接入、与开源 CodeGraph 的分工、多仓契约索引：见 [`GR
 
 ## 一句话
 
-动手前用 MCP/CLI **拉**一张现算的图。过程门禁可以要求「本轮查过」；hook 里 **禁止建图**，缓存 miss 就放行。
+动手前用 code-atlas 的 MCP（`atlas_impact` / `atlas_reuse` / `atlas_trace` …）或 CLI（`atlas …`）**拉**图。过程门禁可以要求「本轮查过」——由 PostToolUse 钩子 `post-atlas` 记录；hook 里 **禁止建图**（只用 `atlas … --cache-only`），缓存 miss 就放行。
 
 ---
 
@@ -70,9 +70,9 @@ WorkBuddy 接入、与开源 CodeGraph 的分工、多仓契约索引：见 [`GR
 
 ## 缓存与 hook
 
-缓存是本地投影，失效看：git HEAD 变了、源文件最大 mtime 变了、文件数变了。AI 刚改完还没提交时，mtime 这条最要紧——给旧影响面比不给更坏。
+缓存由 code-atlas 管（索引在被守卫仓的 `.codegraph/` 与 `ATLAS_HOME`），失效与增量重建是它的事。
 
-`PreToolUse` 只读缓存，超时预算不够建图。miss → fail-open（当没这道图谱强制，公共层 impact 仍按「没查过」拦）。
+钩子只调 `atlas … --json --cache-only`，超时预算不够建图。缓存缺失（atlas 退出码 3）→ fail-open（当没这道图谱强制，公共层 impact 仍按「没查过」拦）。唯一例外是 Stop 的写后比对：`atlas conform` 允许增量建图，限时 12 秒，失败放行。
 
 不要在 hook 里建图，也不要把调用者列表推进 SessionStart。T4 只推公共层目录和盲区一句。
 
@@ -80,14 +80,18 @@ WorkBuddy 接入、与开源 CodeGraph 的分工、多仓契约索引：见 [`GR
 
 ## 怎么用
 
-1. `repo-guard init --write` 生成 `repo-facts.json`（含图谱推测的 publicLayer），**人必须过一眼**
-2. 改公共层前调 `impact`；写新页/新组件按任务调 `similar` / `hot` / `lib_search`
+1. `repo-guard init --write` 生成 `repo-facts.json`（含按 `atlas hot` 推测的 publicLayer；本仓不在 atlas 工作区时先 `atlas add`），**人必须过一眼**
+2. 改公共层前调 `atlas_impact`；写新页/新组件按任务调 `atlas_reuse`（kind=similar / 热点）/ `lib_search`
 3. `repo-guard guard init --write` 会按本仓目录补 pathPatterns。要硬拦时打开 `admission` 并把对应 `enabled` 设为 true
-4. 打分与边权不要改，纪律见 `src/graph/PORTING.md`
+4. 打分与边权在 code-atlas 里维护，不在本仓
 
 ---
 
-## 可视化（设计中）
+## 可视化
+
+已移交 code-atlas：`atlas viz --open`（斜杠命令 `/repo-guard:graph`）。下面是 repo-guard 自带沙盘时期的设计记录。
+
+### 原设计（已废弃）
 
 工作台是**一张（或两张互相有边的）关系图**：总览 / 影响面 / 调用链 / 热点是图上的状态，不是四个页面。点节点看依赖和弹窗证据；字段 / 同类 / 盲区是检索框。只读 `.codebuddy/.cache/`，不在视图里建图。
 

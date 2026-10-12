@@ -80,7 +80,6 @@ const MANIFEST = [
   { src: 'skills', required: true, why: '技能' },
   { src: 'commands', required: true, why: '斜杠命令' },
   { src: 'agents', required: true, why: '子代理' },
-  { src: 'assets', required: true, why: '图谱体检页与沙盘的前端（含本地 echarts，内网不走 CDN）' },
 
   // ── 部门要填的就是这里 ──
   { src: 'layers', required: true, why: '七层作者面 + 全局层 JSON（规范/红线/门禁模板）' },

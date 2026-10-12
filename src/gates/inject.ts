@@ -65,7 +65,7 @@ export function guardSegment(facts: RepoFacts): string[] {
   const layerText = layers.length ? layers.join('、') : '（未配置）';
   const lines = [
     `本项目已接入 repo-guard。公共层目录：${layerText}。`,
-    '改这些目录下**已有**的文件之前，必须先调 impact 工具确认影响面；受影响入口 ≥ 5 时只允许新增可选参数。',
+    '改这些目录下**已有**的文件之前，必须先调 code-atlas 的 atlas_impact 工具（target=文件路径）确认影响面；受影响入口 ≥ 5 时只允许新增可选参数。',
     `单文件超过 ${facts.lineLimit} 行需要拆分。影响面为 0 不等于可以删 —— 注意工具输出里的盲区清单。`,
   ];
   if (facts.componentLibrary) {
@@ -190,11 +190,11 @@ export function featureHint(cfg: GuardConfig, prompt: string): string {
   return [
     '## 新功能需求：先找本仓的参考实现',
     '这像是要新做一块功能。动手写代码之前：',
-    '1. 把需求拆成资源 + 动作，调 similar：resource=<英文资源名，按本仓命名风格>，verbs=<Create / Modify / Delete / Describe 里要做的>，intent=<用户原话>。前端页面直接 intent=<要做什么页面>。',
+    '1. 把需求拆成资源 + 动作，调 code-atlas 的 atlas_reuse：kind=similar，resource=<英文资源名，按本仓命名风格>，verbs=<Create / Modify / Delete / Describe 里要做的>，intent=<用户原话>。前端页面直接 intent=<要做什么页面>。',
     '2. 返回说这个资源**已存在** → 先告诉用户已有实现在哪，问是改现有的还是另起一套，不要直接平行新建。',
     '3. **不存在** → 从返回的参考候选里挑业务最像的一个（不是第 1 个就带 template=<家族名> 再查一次），' +
       '在方案第一句写明「参考 X 实现 Y」和理由，然后照它的分层写。',
-    '4. 写到校验、加密、分页这类小功能时，先 hot intent=<要写什么> 查有没有现成方法。',
+    '4. 写到校验、加密、分页这类小功能时，先 atlas_reuse intent=<要写什么> 查有没有现成方法。',
   ].join('\n');
 }
 

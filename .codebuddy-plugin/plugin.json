@@ -18,7 +18,7 @@
 
   "name": "repo-guard",
   "version": "0.2.0",
-  "description": "仓库体检与影响面守卫：改公共层前先确认影响面，写完扫红线与体量。零服务端——图谱从本仓代码现算并缓存本地，规则读仓库文件。",
+  "description": "仓库体检与影响面守卫：改公共层前先确认影响面，写完扫红线与体量。依赖 code-atlas 提供图谱（atlas CLI + MCP，请先 npm i -g code-atlas）；未安装时图谱相关守卫不生效，其余照常。规则读仓库文件。",
   "author": { "name": "repo-guard" },
   "license": "MIT",
   "keywords": ["code-graph", "impact-analysis", "guardrails", "lint", "quality-gate"],
@@ -48,6 +48,6 @@
 
   "_dependencies": [
     "待补充。可声明依赖的其他插件（支持 semver 与跨 marketplace 授权）。",
-    "repo-guard 的引擎已经打包进 bin/，零外部依赖，不需要。"
+    "repo-guard 自身打包进 bin/，零 npm 依赖；图谱依赖的 code-atlas 不是插件而是全局 CLI（npm i -g code-atlas），不走这里。"
   ]
 }

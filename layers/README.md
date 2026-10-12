@@ -11,7 +11,7 @@
 | process-gates/ | 过程门禁 | README | process-gates.json |
 | human-review/ | 人审 | README | ask.json（T7b 硬开关）；软名单在 facts.json stopConditions |
 | merge-gates/ | 合并门禁 | README | permissions.ask.example.json（Agent 侧）；CI 片段（工程侧） |
-| graph/ | 图谱 | 何时必须查图 | 引擎在 src/graph/ |
+| graph/ | 图谱 | 何时必须查图 | 引擎在 code-atlas |
 
 init 把 JSON 拷到项目 .codebuddy/（已存在不覆盖）。facts.json 例外：按本仓目录生成，不拷模板假路径。规范 standards 是运行时合并，其余是一次性拷贝。
 汇报用规范大纲：七类规范-汇报稿.md（总表）+ 各层 SPEC.md。

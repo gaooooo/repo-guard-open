@@ -17,4 +17,4 @@
 - 必须输出盲区（动态 import、SQL、样式、跨服务）
 - 「未查到 ≠ 不存在」
 
-源码：src/graph/。本目录只写「何时查」。
+引擎：code-atlas（atlas CLI + MCP）。本目录只写「何时查」。

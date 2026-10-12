@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CONFIG_DIR } from '../runtime/paths.js';
-import { RULE } from './render.js';
+import { RULE } from './text.js';
 import { ensureFactsFromRepo, factsInitNote } from './facts-from-repo.js';
 
 export interface LayersInitResult {

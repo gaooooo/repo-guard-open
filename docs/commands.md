@@ -40,5 +40,5 @@
 | 打算做什么 | 为什么还没做 |
 |---|---|
 | `/repo-guard:guard-init` —— 把 `layers/process-gates/` 铺进用户仓库的 `.codebuddy/guard/` | 七道门配置还没接进运行时（P4）。先铺一堆没人读的配置文件只会让人困惑 |
-| `/repo-guard:graph` 打开关系图；`impact` / `trace` / `hot` 选中节点并打开对应弹窗；`field` / `similar` 走检索框 | 见 [`GRAPH-VIZ.md`](GRAPH-VIZ.md)。P0 只出设计 |
+| 图上交互（选中节点查 impact / trace / hot） | 可视化已移交 code-atlas（`/repo-guard:graph` = `atlas viz --open`），交互在那边做 |
 | `/repo-guard:similar` `/repo-guard:lib` | 前端仓才有页面指纹和组件库。Go 样例仓不要做假的同类页 |

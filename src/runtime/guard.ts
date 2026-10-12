@@ -24,7 +24,7 @@ import type { KnowledgeSnapshot, PolicyRule } from '../engine/types.js';
 import { inPublicLayer, type RepoFacts } from './repo-facts.js';
 import { activeRules } from './redlines.js';
 import { hasQueried } from './session-state.js';
-import { selfPath, toRepoRelative } from './paths.js';
+import { toRepoRelative } from './paths.js';
 
 export interface FileVerdict {
   /** 仓库相对路径 */
@@ -90,16 +90,20 @@ export function shouldBlock(v: FileVerdict): boolean {
  *          `--plugin-dir` 加载的插件的 `bin/` 注入 PATH，市场安装的不注入
  *          —— 模型跑完拿到 `command not found`。
  *
- * 所以：MCP 全名、斜杠命令、以及**绝对路径**的 CLI，三条都给。
+ * 所以：MCP 全名、斜杠命令、以及 CLI，三条都给。
  * 冗余在这里是对的 —— 模型少一条路就会去发明一条。
+ *
+ * 图谱移交 code-atlas 后，三条路都指向 atlas：MCP 是插件 .mcp.json 注册的 code-atlas server，
+ * CLI 是全局安装的 `atlas`（npm i -g code-atlas，不依赖插件 bin/ 是否进 PATH）。
+ * AI 调完之后由 PostToolUse 钩子 post-atlas（或 post-bash）记「查过」。
  */
 export function denyReason(v: FileVerdict): string {
   const lines = [
     `\`${v.rel}\` 在本项目的公共层里，改它之前必须先确认影响面。`,
     '按下面任一种方式查（三个是同一个能力，挑能用的那个）：',
-    `  · MCP 工具：mcp__repo-guard__impact，参数 file="${v.rel}"`,
+    `  · MCP 工具：mcp__code-atlas__atlas_impact，参数 target="${v.rel}"（只改某个方法时写 "${v.rel}#方法名"）`,
     `  · 斜杠命令：/repo-guard:impact ${v.rel}`,
-    `  · 命令行：node "${selfPath()}" impact ${v.rel}`,
+    `  · 命令行：atlas impact ${v.rel}（需已安装 code-atlas：npm i -g code-atlas）`,
     '拿到受影响的入口数再决定改法 —— 被 5 个以上入口引用时只允许新增可选参数，不得改已有签名。',
     '**不要用代码搜索代替它。** grep 看不见动态引用、样式引用和跨服务调用，' +
       '拿搜索结果当影响面会得出"没人用，可以删"这种错误结论。',

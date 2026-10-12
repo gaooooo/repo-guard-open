@@ -5,17 +5,25 @@
  * 证明两件事：**拦得对**，而且**不误伤**。
  * 第二件比第一件重要 —— 误伤会让人直接卸载。
  *
- * ── 三个阶段 ──
- *   A 基线（21 条）  没有 guard 配置。其中 20 条是**行为契约**，
+ * ── 四个阶段 ──
+ *   A 基线（28 条）  没有 guard 配置。其中 20 条是**行为契约**，
  *                    自源码版改造前就存在，任何改动都不许动它们；
  *                    G3 是后补的多仓隔离契约（同名文件不许跨仓互相放行）
- *   B 七道门（26 条） 铺上 guard 配置并打开各道门，逐门验拦得对 + 不误伤
+ *   B 七道门（28 条） 铺上 guard 配置并打开各道门，逐门验拦得对 + 不误伤
  *   C 回归（4 条）    删掉 guard 配置，重跑 A 的代表用例。
  *                    **这一阶段是「空配置零行为变化」的唯一证据** ——
  *                    一道门"默认关"但仍改变了输出，等于所有人被迫升级
  *
- * 用法：node verify-hooks.mjs [--tool <引擎路径>] [--keep] [--only <阶段>]
+ *   D 写后比对（3 条）需要 atlas：similar 计划经 post-atlas 记进会话，Stop 调 atlas conform
+ *
+ * 用法：node verify-hooks.mjs [--tool <引擎路径>] [--atlas <bin/atlas>] [--keep] [--only <阶段>]
  * 自建一个临时 git 仓库当被测对象，不碰任何真实仓库。
+ *
+ * ── 图谱来自 code-atlas ──
+ * 「AI 查过影响面 / 同类实现」不再由 repo-guard 的 MCP 记，而是 PostToolUse 钩子 post-atlas
+ *（或 post-bash 识别终端里的 atlas 命令）记。用例里模拟宿主喂 post-atlas 的 stdin。
+ * 需要 atlas 数据的用例（只给符号的 impact）用 --atlas / REPO_GUARD_ATLAS_BIN 指定的 bin/atlas，
+ * 配独立的 ATLAS_HOME 临时目录，先对 fixture 仓跑一次 atlas add。找不到 atlas 时这几条记为 SKIP。
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -29,6 +37,9 @@ const flag = (n) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : null);
 const TOOL = flag('--tool') ?? path.join(HERE, 'repo-guard');
 const KEEP = argv.includes('--keep');
 const ONLY = flag('--only');
+const DEFAULT_ATLAS = path.resolve(HERE, '..', '..', 'code-atlas', 'bin', 'atlas');
+const ATLAS_BIN = flag('--atlas') ?? process.env.REPO_GUARD_ATLAS_BIN ?? (fs.existsSync(DEFAULT_ATLAS) ? DEFAULT_ATLAS : '');
+const HAS_ATLAS = Boolean(ATLAS_BIN) && fs.existsSync(ATLAS_BIN);
 
 if (!fs.existsSync(TOOL)) {
   console.error(`找不到引擎：${TOOL}\n用 --tool <路径> 指定`);
@@ -39,6 +50,9 @@ if (!fs.existsSync(TOOL)) {
 
 const REPO = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-guard-verify-'));
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-guard-home-'));
+const ATLAS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-guard-atlas-'));
+/** 每个钩子进程都带上：atlas 在哪、它的工作区放哪（不碰用户的 ~/.code-atlas） */
+const ATLAS_ENV = HAS_ATLAS ? { REPO_GUARD_ATLAS_BIN: ATLAS_BIN, ATLAS_HOME } : { ATLAS_HOME };
 
 function w(rel, body) {
   const f = path.join(REPO, rel);
@@ -55,6 +69,9 @@ w('src/components/Existing/big.tsx', 'x\n'.repeat(600));
 w('src/components-legacy/old.tsx', 'export const B = 1;\n');
 w('src/views/page/index.tsx', 'export const P = 1;\n');
 w('src/utils/helper.ts', 'export const h = 1;\n');
+// 给「只给符号的 atlas_impact」用：符号要经 atlas 解析回文件
+w('src/utils/fmt.ts', 'export function formatMoney(n: number): string {\n  return n.toFixed(2);\n}\n');
+w('src/views/money/index.tsx', "import { formatMoney } from '../../utils/fmt';\nexport const M = () => formatMoney(1);\n");
 // 给 L1 结构化删除判定用：里面有个受保护标识符，出现 2 次
 w('src/utils/chain.ts', 'export const CHAIN_STATUS = 1;\nexport const useChain = () => CHAIN_STATUS;\n');
 // 给 L1 禁改清单用
@@ -107,7 +124,7 @@ function hook(name, input, env = {}) {
   const r = spawnSync(process.execPath, [TOOL, 'hook', name], {
     input: typeof input === 'string' ? input : JSON.stringify({ cwd: REPO, ...input }),
     encoding: 'utf-8',
-    env: { ...process.env, HOME, ...env },
+    env: { ...process.env, HOME, ...ATLAS_ENV, ...env },
   });
   const out = (r.stdout || '').trim();
   if (!out) return { verdict: 'allow', reason: '' };
@@ -127,26 +144,37 @@ function hook(name, input, env = {}) {
   }
 }
 
-/** 让 MCP 记一次已查 —— 模拟 AI 真的调了某个图谱工具 */
-function mcpCall(sid, name, args) {
-  spawnSync(process.execPath, [TOOL, 'mcp'], {
-    input: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args },
-    }) + '\n',
-    encoding: 'utf-8', cwd: REPO,
-    env: { ...process.env, HOME, CODEBUDDY_SESSION_ID: sid },
-  });
+/**
+ * 模拟 AI 调了 code-atlas 的 MCP 图谱工具：宿主在 PostToolUse 上喂 post-atlas。
+ * 工具名就是插件注册的 mcp__code-atlas__<tool>（真机已确认）。
+ */
+function atlasCall(sid, tool, toolInput, extra = {}) {
+  return hook('post-atlas', { session_id: sid, tool_name: `mcp__code-atlas__${tool}`, tool_input: toolInput, tool_response: { content: [] }, ...extra });
 }
-const recordImpact = (sid, file) => mcpCall(sid, 'impact', { file });
-/** 宿主真实情况：MCP 进程拿不到会话 id（环境变量里没有） */
-function mcpCallNoSid(name, args) {
-  const env = { ...process.env, HOME };
-  delete env.CODEBUDDY_SESSION_ID;
-  delete env.CLAUDE_SESSION_ID;
-  return spawnSync(process.execPath, [TOOL, 'mcp'], {
-    input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) + '\n',
-    encoding: 'utf-8', cwd: REPO, env,
+const recordImpact = (sid, file) => atlasCall(sid, 'atlas_impact', { target: file });
+
+/** 调 repo-guard 自己的 MCP（只剩 check / lib_search / audit） */
+function mcpRequest(req) {
+  const r = spawnSync(process.execPath, [TOOL, 'mcp'], {
+    input: JSON.stringify({ jsonrpc: '2.0', id: 1, ...req }) + '\n',
+    encoding: 'utf-8', cwd: REPO, env: { ...process.env, HOME },
   });
+  try {
+    return JSON.parse((r.stdout || '').trim().split('\n')[0]);
+  } catch {
+    return null;
+  }
+}
+
+/** 需要 atlas 的用例：找不到 atlas 时记 SKIP（期望值也写 SKIP，不算失败但会在报告里显眼） */
+const needAtlas = (fn) => (HAS_ATLAS ? fn() : { verdict: 'SKIP', reason: '没有 atlas（--atlas 指定 bin/atlas）' });
+
+if (HAS_ATLAS) {
+  const r = spawnSync(process.execPath, [ATLAS_BIN, 'add', REPO], { cwd: REPO, encoding: 'utf-8', env: { ...process.env, ATLAS_HOME } });
+  if (r.status !== 0) {
+    console.error(`atlas add 失败：\n${r.stderr || r.stdout}`);
+    process.exit(2);
+  }
 }
 
 // ───────────── 用例 ─────────────
@@ -180,13 +208,13 @@ add('T1', '不误伤同名前缀目录 components-legacy', 'allow',
 add('T2', '仓库外路径放行', 'allow',
   hook('pre-write', { session_id: S, tool_input: { file_path: '/etc/hosts' } }));
 
-// 会话认领：真机上宿主不给 MCP 进程会话 id。不认领的话 AI 查了 impact 记在 _nosession，
-// 写前钩子读真实 id —— 查了还被拦，死循环
+// 图谱查询由 code-atlas 的 MCP 完成，「查过」由 PostToolUse 钩子 post-atlas 记 ——
+// 会话 id 取钩子 stdin 里的，和写前钩子天然是同一个会话（不再依赖 MCP 进程认领）
 const AD = 'adopt-real-sid';
-add('M1', 'MCP 无会话 id：查之前写公共层 → 拦', 'deny',
+add('M1', 'post-atlas 之前写公共层 → 拦', 'deny',
   hook('pre-write', { session_id: AD, tool_input: { file_path: 'src/utils/helper.ts' } }));
-mcpCallNoSid('impact', { file: 'src/utils/helper.ts' });
-add('M2', 'MCP 无会话 id：认领钩子的会话，查过后放行', 'allow',
+atlasCall(AD, 'atlas_impact', { target: 'src/utils/helper.ts' });
+add('M2', 'post-atlas 记下 atlas_impact 后，同一会话放行', 'allow',
   hook('pre-write', { session_id: AD, tool_input: { file_path: 'src/utils/helper.ts' } }));
 
 const G = 'verify-queried';
@@ -197,6 +225,25 @@ add('G2', '查过的不能放行另一个文件', 'deny',
   hook('pre-write', { session_id: G, tool_input: { file_path: 'src/components/Existing/big.tsx' } }));
 add('G3', '在另一个仓查过，不放行本仓的同名文件', 'deny',
   hook('pre-write', { cwd: REPO2, session_id: G, tool_input: { file_path: 'src/components/Existing/index.tsx' } }));
+
+// ── atlas 目标的几种写法 ──
+const GS = 'atlas-symbol';
+add('G4', 'atlas_impact 只给符号 → 经 atlas --cache-only 解析出文件后放行', 'allow',
+  needAtlas(() => {
+    atlasCall(GS, 'atlas_impact', { target: 'formatMoney' });
+    return hook('pre-write', { session_id: GS, tool_input: { file_path: 'src/utils/fmt.ts' } });
+  }));
+const GP = 'atlas-prefix';
+atlasCall(GP, 'atlas_impact', { target: 'some-repo:src/components/Existing/big.tsx#X' });
+add('G5', 'atlas_impact 带「仓id:」前缀与 #符号 → 去掉前缀按文件放行', 'allow',
+  hook('pre-write', { session_id: GP, tool_input: { file_path: 'src/components/Existing/big.tsx' } }));
+add('G6', '非 code-atlas 的工具名不记', 'deny', (() => {
+  hook('post-atlas', { session_id: 'atlas-other', tool_name: 'mcp__other__atlas_impact', tool_input: { target: 'src/utils/helper.ts' } });
+  return hook('pre-write', { session_id: 'atlas-other', tool_input: { file_path: 'src/utils/helper.ts' } });
+})());
+hook('post-bash', { session_id: 'atlas-bash', tool_name: 'Bash', tool_input: { command: 'cd . && atlas impact src/utils/chain.ts#useChain --json' }, tool_response: { exitCode: 0 } });
+add('G7', '终端里跑过 atlas impact（post-bash 识别）→ 放行', 'allow',
+  hook('pre-write', { session_id: 'atlas-bash', tool_input: { file_path: 'src/utils/chain.ts', old_string: 'export const useChain = () => CHAIN_STATUS;', new_string: 'export const useChain = () => CHAIN_STATUS; // x' } }));
 
 add('B1', 'shell 写公共层 → 提醒但不拦', 'context',
   hook('pre-bash', { session_id: S, tool_input: { command: 'sed -i s/a/b/ src/components/x.tsx' } }));
@@ -212,6 +259,16 @@ add('W2', '正常长度文件不提醒', 'allow',
 
 add('S1', '会话开始注入公共层清单', 'context',
   hook('session-start', { session_id: S }));
+const noAtlas = hook('session-start', { session_id: S }, { REPO_GUARD_ATLAS_BIN: '', PATH: '/usr/bin:/bin' });
+add('S2', '没装 atlas → 会话开始明说图谱守卫未生效', 'yes',
+  { verdict: noAtlas.verdict === 'context' && noAtlas.reason.includes('请安装 code-atlas') ? 'yes' : 'no', reason: noAtlas.reason });
+add('S3', '装了 atlas → 不出现安装提示', 'no',
+  needAtlas(() => {
+    const r = hook('session-start', { session_id: S });
+    return { verdict: r.reason.includes('请安装 code-atlas') ? 'yes' : 'no', reason: r.reason };
+  }));
+const tools = mcpRequest({ method: 'tools/list' })?.result?.tools?.map((t) => t.name).join(',') ?? '';
+add('Q1', 'repo-guard MCP 只暴露 check / lib_search / audit', 'check,lib_search,audit', { verdict: tools, reason: tools });
 
 // 未配置 → 必须 fail-open
 fs.renameSync(path.join(REPO, '.codebuddy/repo-facts.json'), path.join(REPO, 'facts.bak'));
@@ -433,9 +490,15 @@ writeGuard({
 });
 add('L1-10', '新建页面未查 similar → 拦', 'deny',
   hook('pre-write', { session_id: 'l1g', tool_input: { file_path: 'src/views/newpage/index.tsx' } }));
-mcpCall('l1h', 'similar', { intent: '带分页的列表页' });
+atlasCall('l1h', 'atlas_reuse', { kind: 'similar', intent: '带分页的列表页' });
 add('L1-11', '查过 similar 后新建页面 → 放行', 'allow',
   hook('pre-write', { session_id: 'l1h', tool_input: { file_path: 'src/views/newpage/index.tsx' } }));
+atlasCall('l1k', 'atlas_reuse', { intent: '带分页的列表页' });
+add('L1-11b', 'atlas_reuse 不带 kind/resource 是查热点，不算查过同类 → 新建页面仍拦', 'deny',
+  hook('pre-write', { session_id: 'l1k', tool_input: { file_path: 'src/views/newpage/index.tsx' } }));
+hook('post-bash', { session_id: 'l1m', tool_name: 'Bash', tool_input: { command: 'atlas similar 带分页的列表页 --json' }, tool_response: { exitCode: 0 } });
+add('L1-11c', '终端里跑过 atlas similar（post-bash 识别）→ 新建页面放行', 'allow',
+  hook('pre-write', { session_id: 'l1m', tool_input: { file_path: 'src/views/newpage/index.tsx' } }));
 add('L1-12', '新建组件未查组件库 → 拦', 'deny',
   hook('pre-write', { session_id: 'l1i', tool_input: { file_path: 'src/components/New/index.tsx' } }));
 add('L1-13', '**已存在**的页面不受新建规则约束', 'allow',
@@ -553,20 +616,58 @@ add('Z3', '删掉 guard 后：Stop 不再有任何输出', 'allow', hook('stop',
 add('Z4', '删掉 guard 后：提问不再注入', 'allow',
   hook('user-prompt-submit', { session_id: 'z', prompt: '帮我改一下支付回调的逻辑，顺便把那个组件也调整下' }));
 
+// ══════════════════ 阶段 D · code-atlas 写后比对（需要 atlas）══════════════════
+//
+// AI 调 atlas_reuse(kind=similar) → post-atlas 用 --cache-only 跑一次 similar 拿参考计划记进会话 →
+// AI 写了新接口但跳过逻辑层 → Stop 调 atlas conform 发现偏差 → 阻止停止；同一结论只说一次。
+
+phase = 'D';
+const REPO3 = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-guard-verify3-'));
+function w3(rel, body) {
+  const f = path.join(REPO3, rel);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, body);
+}
+if (HAS_ATLAS) {
+  spawnSync('git', ['init', '-q', '.'], { cwd: REPO3 });
+  w3('go.mod', 'module example.com/demo\n\ngo 1.22\n');
+  w3('router/router.go', 'package router\n\nimport (\n\t"github.com/gin-gonic/gin"\n\t"example.com/demo/service"\n)\n\nfunc Register(r *gin.Engine) {\n\tr.POST("/DescribeUsers", service.DescribeUsers)\n\tr.POST("/CreateUser", service.CreateUser)\n\tr.POST("/ModifyUser", service.ModifyUser)\n\tr.POST("/DeleteUser", service.DeleteUser)\n}\n');
+  w3('service/user.go', 'package service\n\nimport (\n\t"github.com/gin-gonic/gin"\n\t"example.com/demo/logic"\n)\n\nfunc DescribeUsers(c *gin.Context) { logic.DescribeUsers() }\nfunc CreateUser(c *gin.Context)    { logic.CreateUser() }\nfunc ModifyUser(c *gin.Context)    { logic.ModifyUser() }\nfunc DeleteUser(c *gin.Context)    { logic.DeleteUser() }\n');
+  w3('logic/user.go', 'package logic\n\nimport "example.com/demo/repo"\n\nfunc DescribeUsers() { repo.FindUsers() }\nfunc CreateUser()    { repo.InsertUser() }\nfunc ModifyUser()    { repo.UpdateUser() }\nfunc DeleteUser()    { repo.RemoveUser() }\n');
+  w3('repo/user.go', 'package repo\n\nfunc FindUsers()  {}\nfunc InsertUser() {}\nfunc UpdateUser() {}\nfunc RemoveUser() {}\n');
+  w3('.codebuddy/repo-facts.json', JSON.stringify({ version: 1, analyzer: null, publicLayer: ['repo/'], componentLibrary: null, lineLimit: 500, generatedAt: new Date().toISOString() }));
+  spawnSync(process.execPath, [ATLAS_BIN, 'add', REPO3], { cwd: REPO3, encoding: 'utf-8', env: { ...process.env, ATLAS_HOME } });
+}
+const D = 'atlas-conform';
+add('D1', 'atlas_reuse(similar) 记下参考计划，写了跳层的新接口 → Stop 阻止停止', 'continue-false',
+  needAtlas(() => {
+    atlasCall(D, 'atlas_reuse', { kind: 'similar', resource: 'Asset', verbs: ['Create'] }, { cwd: REPO3 });
+    w3('service/asset.go', 'package service\n\nimport "github.com/gin-gonic/gin"\nimport "example.com/demo/repo"\n\nfunc CreateAsset(c *gin.Context) { repo.InsertUser() }\n');
+    hook('pre-write', { cwd: REPO3, session_id: D, tool_name: 'Write', tool_input: { file_path: 'service/asset.go' } });
+    return hook('stop', { cwd: REPO3, session_id: D });
+  }));
+add('D2', '比对结论里点名跳过了逻辑层', 'yes',
+  needAtlas(() => ({ verdict: /写后比对 · Asset/.test(cases.at(-1).got.reason) && /跳过了逻辑层/.test(cases.at(-1).got.reason) ? 'yes' : 'no', reason: cases.at(-1).got.reason })));
+add('D3', '同一结论每会话只说一次 → 第二次 Stop 放行', 'allow',
+  needAtlas(() => hook('stop', { cwd: REPO3, session_id: D })));
+
 // ───────────── 报告 ─────────────
 
 const rows = cases
   .filter((c) => !ONLY || c.phase === ONLY.toUpperCase())
-  .map((c) => ({ ...c, ok: c.got.verdict === c.want }));
+  .map((c) => ({ ...c, ok: c.got.verdict === c.want || c.got.verdict === 'SKIP' }));
+const skipped = rows.filter((r) => r.got.verdict === 'SKIP').length;
 const pass = rows.filter((r) => r.ok).length;
 
 const PHASE_LABEL = {
   A: '阶段 A · 基线契约（无 guard 配置）',
   B: '阶段 B · 七道门',
   C: '阶段 C · 删掉 guard，验零行为变化',
+  D: '阶段 D · code-atlas 写后比对',
 };
 
-console.log(`\n钩子回归矩阵 · ${pass}/${rows.length} 通过\n`);
+console.log(`\n钩子回归矩阵 · ${pass}/${rows.length} 通过${skipped ? `（其中 ${skipped} 条因没有 atlas 跳过）` : ''}\n`);
+console.log(HAS_ATLAS ? `atlas：${ATLAS_BIN}（ATLAS_HOME 临时目录）` : '⚠ 没有 atlas：需要图谱数据的用例已跳过');
 let cur = '';
 for (const r of rows) {
   if (r.phase !== cur) {
@@ -599,6 +700,8 @@ if (!KEEP) {
   fs.rmSync(REPO, { recursive: true, force: true });
   fs.rmSync(REPO2, { recursive: true, force: true });
   fs.rmSync(HOME, { recursive: true, force: true });
+  fs.rmSync(ATLAS_HOME, { recursive: true, force: true });
+  fs.rmSync(REPO3, { recursive: true, force: true });
 } else {
   console.log(`\n临时仓库保留在 ${REPO}\n第二个仓库保留在 ${REPO2}\nHOME 保留在 ${HOME}`);
 }

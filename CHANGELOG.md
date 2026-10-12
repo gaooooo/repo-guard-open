@@ -2,6 +2,14 @@
 
 ## 未发布
 
+### 删除自带图谱引擎，图谱改由 code-atlas 提供
+
+- 删除 `src/graph`、`src/insight`、`src/viz`、图谱缓存与 `assets/viz`；去掉 `@babel/*`、`echarts` 依赖与 parity / viz 回归。
+- CLI 删除 `impact / hot / trace / similar / contracts / viz / conform`（敲了会提示改用同名 `atlas` 命令）；`scan` 转调 `atlas scan`；`init` 的公共层推测改用 `atlas hot --json`，本仓不在 atlas 工作区时先 `atlas add`。
+- MCP 只剩 `check / lib_search / audit`；插件 `.mcp.json` 同时注册 `code-atlas`（`mcp__code-atlas__atlas_*`）。
+- 新钩子 `post-atlas`（PostToolUse）记录 AI 对 `atlas_impact / atlas_reuse / atlas_trace` 的调用；`post-bash` 识别终端里的 `atlas impact|similar|hot`；Stop 写后比对改调 `atlas conform`。
+- 没装 atlas 时 SessionStart 明说图谱相关守卫未生效。
+
 ### viz 文件总览展开后显示方法名
 
 展开某个 `.go` 时，类型/方法挂在文件右侧（与四仓图同一套列偏移），画出 file/cls → 方法的包含边。

@@ -237,7 +237,7 @@ export function buildFactsFromRepo(repoDir: string): Record<string, unknown> {
   if (rf && rf.publicLayer.length) {
     push(
       arch,
-      '公共层目录（init 推测，请人确认）：' + rf.publicLayer.join('、') + '。改其中已有文件前必须先查 impact。',
+      '公共层目录（init 推测，请人确认）：' + rf.publicLayer.join('、') + '。改其中已有文件前必须先查影响面（code-atlas 的 atlas_impact）。',
     );
   }
 
@@ -371,7 +371,7 @@ export function buildFactsFromRepo(repoDir: string): Record<string, unknown> {
     knowledge.push({
       id: 'PK-ARCH-005',
       topic: '公共层',
-      content: '公共层以 .codebuddy/repo-facts.json 的 publicLayer 为准。改其中已有文件前必须先查 impact。',
+      content: '公共层以 .codebuddy/repo-facts.json 的 publicLayer 为准。改其中已有文件前必须先查影响面（code-atlas 的 atlas_impact）。',
       enabled: true,
     });
   }

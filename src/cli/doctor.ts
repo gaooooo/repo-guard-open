@@ -30,7 +30,7 @@ import path from 'node:path';
 import { CONFIG_DIR, configPath, pluginPath } from '../runtime/paths.js';
 import { readFacts } from '../runtime/repo-facts.js';
 import { hasRedlines } from '../runtime/redlines.js';
-import { RULE } from './render.js';
+import { RULE } from './text.js';
 import {
   STANDARDS_DIR,
   standardsDirOf,

@@ -15,7 +15,7 @@ import path from 'node:path';
 
 import { configPath, pluginPath } from '../runtime/paths.js';
 import { FACTS_FILE, PROCESS_GATES_FILE, type GuardConfig } from './config.js';
-import { RULE } from '../cli/render.js';
+import { RULE } from '../cli/text.js';
 import { ensureFactsFromRepo, factsInitNote } from '../cli/facts-from-repo.js';
 import { ensureProcessGatesFromRepo, fillComponentFacts } from '../cli/process-gates-from-repo.js';
 

@@ -9,8 +9,10 @@
  * 7 条 allow 用例会集体变红。提醒统一走 `session-start` / `post-write` / `pre-bash`。
  *
  * **② 只读图谱缓存，永不建图。**
+ * 图谱由外部 code-atlas 提供，钩子只能子进程调 `atlas … --json --cache-only`。
  * `pre-write` 的超时预算只有十几秒，`pre-bash` / `post-write` 只有几秒，
- * 而万文件级仓库建图要几十秒。缓存 miss 就 fail-open。
+ * 而万文件级仓库建图要几十秒。缓存 miss（atlas 退出码 3）就 fail-open。
+ * 唯一例外是 Stop 的写后比对：允许 atlas 增量建图，限时 12 秒，失败放行。
  *
  * **③ 任何异常都必须 fail-open。**
  * hook 抛异常 / 非零退出，在 `PreToolUse` 上意味着**工具调用被阻断**。
@@ -27,6 +29,7 @@
  * 摘要一直是【推】）。这一处差异已登记在 parity 的 KNOWN_DEVIATIONS 里。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { findRepoRoot, toRepoRelative } from '../runtime/paths.js';
@@ -50,8 +53,8 @@ import { loadGuardConfig, type GuardConfig } from '../gates/config.js';
 import { buildInjection, featureHint, matchTaskRoutes } from '../gates/inject.js';
 import { judgeRedline, judgeScope, noteTouched, type WriteToolInput } from '../gates/admission.js';
 import { judgeGraphEnforce } from '../gates/graph-enforce.js';
-import { conform, renderConform } from '../insight/conform.js';
-import { getGraph } from '../runtime/graph-cache.js';
+import { atlasAvailable, atlasJson } from '../atlas/client.js';
+import { trackAtlasBash, trackAtlasTool } from './atlas-track.js';
 import { judgeLoop, iterationNote, noteToolResult } from '../gates/loop.js';
 import { isDeliveryAction, judgeDelivery, noteEvidence, recordFinalSignal } from '../gates/delivery.js';
 import { loadHumanReview, redlineShouldAsk } from '../layers/human-review.js';
@@ -73,7 +76,7 @@ interface HookInput {
   tool_name?: string;
   /** UserPromptSubmit 的用户原话 */
   prompt?: string;
-  tool_input?: WriteToolInput & { command?: string };
+  tool_input?: WriteToolInput & { command?: string; [k: string]: unknown };
   /** PostToolUse 的工具返回。用于判定成功/失败 */
   tool_response?: { success?: boolean; error?: unknown; [k: string]: unknown };
   [k: string]: unknown;
@@ -204,11 +207,16 @@ function sessionStart(input: HookInput): void {
   record('session_start', repoDir);
 
   const std = injectSegment(standardsOf(repoDir, facts), 'session_start');
+  // 图谱由 code-atlas 提供。没装时守卫本身照常（判据是会话状态），但 AI 查不了影响面，
+  // 被拦之后无路可走 —— 必须明说，不能沉默（同 F2 的理由）。不阻塞
+  const atlasNote = atlasAvailable()
+    ? ''
+    : '图谱相关守卫未生效：没找到 code-atlas（atlas 命令）。请安装 code-atlas（npm i -g code-atlas）后重开会话；在此之前查不了影响面 / 同类实现。';
 
   if (!facts) {
     // 规范可能铺了但 repo-facts 没跑过 —— 两件事互相独立，各说各的
     const head = '本仓还没跑过 repo-guard init —— 公共层与红线都未配置，写前守卫不会生效。';
-    emitContext('SessionStart', std ? `${head}\n\n${std}` : head);
+    emitContext('SessionStart', [head, atlasNote, std].filter(Boolean).join('\n\n'));
     return;
   }
 
@@ -216,7 +224,7 @@ function sessionStart(input: HookInput): void {
   // 与接入 L0 之前的输出逐字节相同 —— 铁律 ④
   const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
   const factNote = '工程事实长文见仓库根 CODEBUDDY.md（本段只注机器摘要）。';
-  const all = [text, factNote, std].filter(Boolean).join('\n\n');
+  const all = [text, factNote, atlasNote, std].filter(Boolean).join('\n\n');
   if (all) emitContext('SessionStart', all);
 }
 
@@ -505,6 +513,20 @@ function postWrite(input: HookInput): void {
 function postBash(input: HookInput): void {
   const repoDir = repoOf(input);
   noteToolResult(repoDir, loadGuardConfig(repoDir), input.tool_name ?? 'Bash', input.tool_input, null, toolSucceeded(input));
+  // AI 在终端里跑了 atlas impact / similar / hot：和调 MCP 一样算「查过」
+  const cmd = input.tool_input?.command;
+  if (typeof cmd === 'string' && /\batlas\s+(impact|similar|hot)\b/.test(cmd)) trackAtlasBash(repoDir, cmd);
+}
+
+/**
+ * code-atlas 的图谱工具调用之后（PostToolUse，matcher 见 hooks.json）：记会话状态。
+ * 原来由 repo-guard 自己的 MCP 在 impact / hot / similar 里记；图谱移交 code-atlas 后改在这里记。
+ * 只写状态与埋点，不输出任何东西。
+ */
+function postAtlas(input: HookInput): void {
+  const name = input.tool_name ?? '';
+  if (!name.startsWith('mcp__code-atlas__')) return;
+  trackAtlasTool(repoOf(input), name, (input.tool_input ?? {}) as Record<string, unknown>);
 }
 
 function postFail(input: HookInput): void {
@@ -526,11 +548,22 @@ function postFail(input: HookInput): void {
  */
 /**
  * 写后比对：本轮 similar 留下过参考计划、且本轮写过文件时才跑。
- * 要重建图谱（新代码刚写进去，缓存必然过期），四个 gateway 仓实测 0.4~0.7 秒，在 Stop 的 15 秒预算内。
+ * 交给 code-atlas：`atlas conform --plan <临时 json> <改动文件…> --json`。新代码刚写进去，
+ * 图谱必然过期 —— 这里允许 atlas 增量建图，限时 12 秒（Stop 预算 15 秒），任何失败都放行。
  * 同一份结论每会话只说一次 —— 改了代码结论变了会再说。
  */
 /** 写后比对每会话最多阻止停止几次。AI 改了还偏、或者有理由不照参考写，第三次就放它走 */
 const CONFORM_MAX_BLOCKS = 2;
+const CONFORM_TIMEOUT_MS = 12_000;
+
+interface AtlasConformResult {
+  resource: string;
+  template: string | null;
+  items?: Array<{ issue?: string | null }>;
+  duplicates?: unknown[];
+  drift: boolean;
+  text: string;
+}
 
 async function conformNote(repoDir: string): Promise<{ text: string; drift: boolean }> {
   const none = { text: '', drift: false };
@@ -538,20 +571,37 @@ async function conformNote(repoDir: string): Promise<{ text: string; drift: bool
   if (!plans.length) return none;
   const touched = sessionTouchedFiles(repoDir);
   if (!touched.length) return none;
-  const { graph } = await getGraph(repoDir);
+
+  const tmp = path.join(os.tmpdir(), `repo-guard-plans-${process.pid}-${Date.now()}.json`);
+  let results: AtlasConformResult[] = [];
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(plans.map(({ ts: _ts, repo: _repo, ...p }) => p)));
+    const r = atlasJson<{ results?: AtlasConformResult[] }>(['conform', '--plan', tmp, ...touched, '--json', '--repo', repoDir], {
+      cwd: repoDir,
+      timeoutMs: CONFORM_TIMEOUT_MS,
+    });
+    if (!r.ok) return none;
+    results = Array.isArray(r.data.results) ? r.data.results : [];
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* 临时文件删不掉无所谓 */
+    }
+  }
+
   const out: string[] = [];
   let drift = false;
-  for (const p of plans) {
-    const r = conform(graph, p, touched);
-    if (!r) continue;
-    const text = renderConform(r);
-    if (!claimStopNotice(`conform:${p.key}:${hashText(text)}`)) continue;
+  for (const r of results) {
+    if (!r || typeof r.text !== 'string') continue;
+    const key = plans.find((p) => p.resource === r.resource)?.key ?? r.resource;
+    if (!claimStopNotice(`conform:${key}:${hashText(r.text)}`)) continue;
     if (r.drift) drift = true;
-    const kinds = [...new Set([...r.items.map((i) => i.issue).filter(Boolean), ...(r.duplicates.length ? ['duplicate'] : [])])];
+    const kinds = [...new Set([...(r.items ?? []).map((i) => i.issue).filter((x): x is string => !!x), ...(r.duplicates?.length ? ['duplicate'] : [])])];
     record(r.drift ? 'conform_drift' : 'conform_ok', repoDir, {
-      detail: `${p.resource}<-${p.template ?? ''}${kinds.length ? `:${kinds.join(',')}` : ''}`,
+      detail: `${r.resource}<-${r.template ?? ''}${kinds.length ? `:${kinds.join(',')}` : ''}`,
     });
-    out.push(text);
+    out.push(r.text);
   }
   // 拦的次数用完了就只提醒、不再阻止停止
   if (drift && !claimConformBlock()) drift = false;
@@ -608,7 +658,7 @@ export async function runHook(name: string): Promise<number> {
   try {
     const input = readStdin();
     // 会话 id 只在 stdin 里 —— 必须在任何读写状态之前灌进去，
-    // 否则 impact（MCP 进程，id 从环境变量来）记的状态和这里读的对不上
+    // 否则各钩子（post-atlas 记、pre-write 读）的状态对不上
     setSessionId(input.session_id);
     // 让 MCP 进程（拿不到会话 id）能认领到这个会话，见 session-state 的 adoptSessionFor
     bindCurrentSession(repoOf(input));
@@ -630,6 +680,9 @@ export async function runHook(name: string): Promise<number> {
         break;
       case 'post-bash':
         postBash(input);
+        break;
+      case 'post-atlas':
+        postAtlas(input);
         break;
       case 'post-fail':
         postFail(input);

@@ -21,7 +21,7 @@ import path from 'node:path';
 
 import { CONFIG_DIR } from '../runtime/paths.js';
 import { redlinesFile, redlinesTemplateFile } from '../runtime/redlines.js';
-import { RULE } from './render.js';
+import { RULE } from './text.js';
 import type { StandardsResult } from './standards.js';
 
 export function runRedlinesInit(repoDir: string, write: boolean): StandardsResult {

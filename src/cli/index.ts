@@ -10,8 +10,8 @@
  *   repo-guard mcp           宿主拉起的 stdio MCP server
  *   repo-guard hook <name>   宿主在事件点上调的钩子
  *
- * 合成一个文件是刻意的：三者共用图谱缓存、会话状态、红线加载，
- * 拆成三个二进制会让"AI 调 impact 之后 hook 放行"这条链路跨进程对齐变得脆弱。
+ * 合成一个文件是刻意的：三者共用会话状态、红线加载。
+ * 图谱能力不在这里 —— 由外部 code-atlas（atlas CLI + MCP）提供，见 src/atlas/client.ts。
  *
  * ── stdout 是协议通道 ──
  * `mcp` 的 stdout 是 JSON-RPC 帧，`hook` 的 stdout 是宿主要解析的 JSON。
@@ -20,34 +20,16 @@
  *   · 报错信息也走 stderr
  *   · 只有命令本身的结果走 stdout
  */
-import { spawnSync } from 'node:child_process';
-import path from 'node:path';
-
-import { renderApiContractsAsTs, type ReportContext } from '../graph/graph-report.js';
-import { runSimilar } from './similar.js';
-import { conform, renderConform } from '../insight/conform.js';
-import { traceOrMiss } from './trace.js';
 import { auditPolicy, formatAuditReport } from '../engine/policy-audit.js';
-import { findRepoRoot, splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
+import { findRepoRoot } from '../runtime/paths.js';
 import { readFacts, DEFAULT_LINE_LIMIT, componentDocsHint } from '../runtime/repo-facts.js';
 import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
-import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
 import { judge, missingConfig } from '../runtime/guard.js';
-import {
-  similarPlans,
-  sessionTouchedFiles,
-  adoptSessionFor,
-  recordSimilarPlan,
-  recordHotQuery,
-  recordLibSearch,
-  recordQueried,
-  recordSimilarSearch,
-} from '../runtime/session-state.js';
+import { adoptSessionFor, recordLibSearch } from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
 import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
-import { renderHotCli, renderImpactCli, renderReuseFor, RULE } from './render.js';
-import { hasProblems, renderScanCli, scan } from './scan.js';
-import { renderInit } from './init.js';
+import { atlasAvailable, atlasJson, atlasRepoEntry, atlasRun, atlasVersion } from '../atlas/client.js';
+import { renderInit, type AtlasInitInfo, type HotSpot, type ScanResult } from './init.js';
 import { runHook } from '../hooks/index.js';
 import { runMcp } from '../mcp/server.js';
 import { renderGovernance } from './governance.js';
@@ -63,23 +45,15 @@ import { runDoctor } from './doctor.js';
 import { runRedlinesInit } from './redlines.js';
 import { runLayersInit } from './layers-init.js';
 import { runBootstrap } from './bootstrap.js';
-import { writeStaticViz } from '../viz/index.js';
-import { serveViz } from '../viz/server.js';
 import { loadStandards } from '../standards/loader.js';
 
 const HELP = `
 repo-guard —— 仓库体检与影响面工具（零服务端）
 
   repo-guard init [--write] [--all] 体检；--write 写 repo-facts；--all 一次铺齐全部控制文件
-  repo-guard scan [--json]         体量与结构体检（超长文件、循环依赖）
+  repo-guard scan [--json]         体量与结构体检（转调 atlas scan，退出码透传）
   repo-guard check <文件…>          改动自查：碰没碰公共层和红线，有问题非零退出
-  repo-guard impact <文件>[#符号]   改它会波及哪些入口；#符号 收窄到方法或结构体字段
-  repo-guard hot [要写什么] [--limit N] 有没有现成的：带需求按名字与注释找；不带返回全仓热点
-  repo-guard trace <路径>          这个页面/接口打到哪里，含反推的出入参
-  repo-guard similar <要做什么> [--resource User --verbs Create,Delete --template AIMCredentials]
-                                   这类页面 / 接口本仓有没有、怎么写的（后端按方法家族逐动作核对）
   repo-guard lib search <要什么>    UI 组件库里有没有现成的
-  repo-guard contracts [接口]       反推导出接口类型草稿（必须人工 review）
   repo-guard audit                 红线体检：规则守空气没、有没有后门、证据还准不准
   repo-guard redlines init [--write] 把部门红线模板铺进 .codebuddy/redlines.json
   repo-guard governance            治理留痕报表：这些门在做有用功还是在骚扰人
@@ -91,12 +65,17 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard standards audit       规范体检：有没有守空气、有没有被静默降级
   repo-guard doctor                配置体检：填完配置跑它，查 JSON 坏没坏、条目会不会静默失效
   repo-guard layers [init [--write]] 七层分类；init 铺人审/合并门禁/事实片段
-  repo-guard conform               写后比对：本轮新写的接口是否照 similar 给的参考分层写
-  repo-guard viz [--out <目录>]     生成图谱体检页（静态 HTML，可离线发人）
-  repo-guard viz --serve [--port N] 本地沙盘：在图上模拟插件能力，结果与 AI 调用逐字一致
   repo-guard mcp                   作为 stdio MCP 给 AI 用
   repo-guard hook <name>           插件钩子（由宿主调用）
+
+图谱命令已移交 code-atlas（npm i -g code-atlas），用同名的 atlas 命令：
+  atlas impact <文件#符号>   atlas hot [要写什么]   atlas trace <路径>
+  atlas similar <要做什么> [--resource User --verbs Create,Delete]
+  atlas contracts --types [接口]   atlas conform --plan <plan.json>   atlas viz --open
 `;
+
+/** 已移交 code-atlas 的命令。敲了给一句指路，不静默报「未知命令」 */
+const MOVED_TO_ATLAS = new Set(['impact', 'hot', 'trace', 'similar', 'contracts', 'viz', 'conform']);
 
 function out(s: string): void {
   process.stdout.write(s);
@@ -119,18 +98,8 @@ function err(s: string): void {
   process.stderr.write(`${s}\n`);
 }
 
-/** 渲染上下文。engine 的 render* 需要它算新鲜度与上下文节省量 */
-export function reportContext(repoDir: string, handle: GraphHandle): ReportContext {
-  return {
-    repoName: path.basename(repoDir),
-    localPath: repoDir,
-    commitSha: handle.headSha,
-    indexedAt: handle.builtAt,
-  };
-}
-
 /** 带值的选项。解析位置参数时要把它们的值一起跳过 */
-const VALUE_FLAGS = new Set(['--limit', '--min-call-sites', '--stack', '--port', '--out', '--resource', '--verbs', '--template']);
+const VALUE_FLAGS = new Set(['--limit', '--stack', '--line-limit', '--repo']);
 
 function flagNumber(argv: string[], name: string, fallback: number): number {
   const i = argv.indexOf(name);
@@ -160,11 +129,29 @@ function positionals(argv: string[], from: number): string[] {
   return out;
 }
 
-/** git 工作区里改过 / 新增的文件（仓库相对路径）。拿不到就空 */
-function gitChangedFiles(repoDir: string): string[] {
-  const r = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: repoDir, encoding: 'utf-8' });
-  if (r.status !== 0) return [];
-  return r.stdout.split('\n').map((l) => l.slice(3).trim().replace(/^.* -> /, '')).filter(Boolean);
+/** init 用的图谱信息：仓不在 atlas 工作区就先 `atlas add`，再取热点与体检 */
+function collectAtlasForInit(repoDir: string, lineLimit: number): AtlasInitInfo {
+  if (!atlasAvailable()) return { available: false, hot: null, scan: null };
+  const version = atlasVersion();
+  let entry = atlasRepoEntry(repoDir, 30_000);
+  let addedMs: number | undefined;
+  if (!entry) {
+    err('本仓还不在 code-atlas 工作区，正在 atlas add 建索引（只这一次，可能要十几秒）…');
+    const t0 = Date.now();
+    const r = atlasRun(['add', repoDir], { cwd: repoDir, timeoutMs: 600_000 });
+    addedMs = Date.now() - t0;
+    if (r.status !== 0) {
+      return { available: true, version, error: `atlas add 失败：${(r.stderr || r.stdout || '').trim().slice(0, 300)}`, hot: null, scan: null };
+    }
+    entry = atlasRepoEntry(repoDir, 30_000);
+    if (!entry) return { available: true, version, error: 'atlas add 之后工作区里仍找不到本仓', hot: null, scan: null };
+  }
+  const base = { available: true, version, workspace: entry.workspace, repoId: entry.id, role: entry.role, stats: entry.stats, addedMs };
+  const opt = { cwd: repoDir, timeoutMs: 300_000 };
+  const hot = atlasJson<{ hot?: HotSpot[] }>(['hot', '--json', '--limit', '200', '--repo', repoDir], opt);
+  if (!hot.ok) return { ...base, error: hot.message, hot: null, scan: null };
+  const sc = atlasJson<ScanResult>(['scan', '--json', '--line-limit', String(lineLimit), '--repo', repoDir], opt);
+  return { ...base, hot: hot.data.hot ?? [], scan: sc.ok ? sc.data : null, error: sc.ok ? undefined : sc.message };
 }
 
 async function main(): Promise<number> {
@@ -187,12 +174,11 @@ async function main(): Promise<number> {
 
   switch (cmd) {
     case 'init': {
-      const handle = await getGraph(repoDir);
       const facts = readFacts(repoDir);
-      const sr = scan(repoDir, handle.graph, facts?.lineLimit ?? DEFAULT_LINE_LIMIT);
+      const info = collectAtlasForInit(repoDir, facts?.lineLimit ?? DEFAULT_LINE_LIMIT);
       const write = argv.includes('--write');
       const all = argv.includes('--all');
-      const initText = renderInit(repoDir, handle, sr, { write }).text;
+      const initText = renderInit(repoDir, info, { write }).text;
       if (!all) {
         outText(initText);
         return 0;
@@ -203,16 +189,21 @@ async function main(): Promise<number> {
     }
 
     case 'scan': {
-      const handle = await getGraph(repoDir);
-      const facts = readFacts(repoDir);
-      const sr = scan(repoDir, handle.graph, facts?.lineLimit ?? DEFAULT_LINE_LIMIT);
-      if (argv.includes('--json')) {
-        out(`${JSON.stringify(sr, null, 2)}\n`);
-        return 0;
+      // 转调 atlas scan：文本 / --json 原样透传，退出码透传（有问题非零，能挂流水线）
+      if (!atlasAvailable()) {
+        err('scan 由 code-atlas 提供，但没找到 atlas。安装：npm i -g code-atlas');
+        return 2;
       }
-      outText(renderScanCli(sr));
-      // 非零退出是它能挂进流水线的全部接口：`repo-guard scan || exit 1`
-      return hasProblems(sr) ? 1 : 0;
+      const facts = readFacts(repoDir);
+      const args = ['scan', ...argv.slice(1)];
+      if (!argv.includes('--line-limit')) args.push('--line-limit', String(facts?.lineLimit ?? DEFAULT_LINE_LIMIT));
+      if (!argv.includes('--repo')) args.push('--repo', repoDir);
+      const r = atlasRun(args, { cwd: repoDir, inherit: true });
+      if (r.error) {
+        err(`atlas scan 执行失败：${r.error.message}`);
+        return 2;
+      }
+      return r.status ?? 2;
     }
 
     case 'check': {
@@ -262,72 +253,6 @@ async function main(): Promise<number> {
       return ruleHits.length ? 1 : 0;
     }
 
-    case 'impact': {
-      const raw = argv[1];
-      if (!raw) {
-        err('用法：repo-guard impact <文件>[#符号]');
-        return 2;
-      }
-      const { file: rawFile, symbol } = splitFileSymbol(raw);
-      const rel = toRepoRelative(repoDir, rawFile);
-      if (!rel) {
-        err('路径不在仓库里');
-        return 2;
-      }
-      const handle = await getGraph(repoDir);
-      recordQueried(repoDir, rel);
-      record('graph_query', repoDir, { file: rel, detail: symbol ? 'impact_symbol' : 'impact' });
-      outText(renderImpactCli(handle.graph, rel, symbol));
-      return 0;
-    }
-
-    case 'hot': {
-      const handle = await getGraph(repoDir);
-      const intent = positionals(argv, 1).join(' ');
-      recordHotQuery(repoDir);
-      record('graph_query', repoDir, { detail: intent ? 'hot_intent' : 'hot' });
-      if (intent) {
-        outText(`\n${renderReuseFor(handle.graph, intent, flagNumber(argv, '--limit', 8))}`);
-        return 0;
-      }
-      outText(renderHotCli(handle.graph, flagNumber(argv, "--limit", 10)));
-      return 0;
-    }
-
-    case 'trace': {
-      const urlPath = argv[1];
-      if (!urlPath) {
-        err('用法：repo-guard trace <路径>');
-        return 2;
-      }
-      const handle = await getGraph(repoDir);
-      record('graph_query', repoDir, { detail: 'trace' });
-      outText(`\n${traceOrMiss(handle.graph, urlPath, reportContext(repoDir, handle))}`);
-      return 0;
-    }
-
-    case 'similar': {
-      const intent = positionals(argv, 1).join(' ');
-      const flag = (n: string) => (argv.indexOf(n) >= 0 ? argv[argv.indexOf(n) + 1] ?? '' : '');
-      const resource = flag('--resource');
-      const verbs = flag('--verbs') ? flag('--verbs').split(/[,，\s]+/).filter(Boolean) : undefined;
-      if (!intent && !resource) {
-        err('用法：repo-guard similar <要做什么> [--resource User] [--verbs Create,Modify,Delete]');
-        return 2;
-      }
-      const handle = await getGraph(repoDir);
-      recordSimilarSearch(repoDir, intent || resource);
-      record('graph_query', repoDir, { detail: resource ? 'similar_resource' : 'similar' });
-      const template = flag('--template') || undefined;
-      const res = runSimilar(handle.graph, { intent, resource, verbs, template, limit: flagNumber(argv, '--limit', 3) }, reportContext(repoDir, handle));
-      if (res.plan) {
-        recordSimilarPlan(repoDir, res.plan);
-        record('similar_plan', repoDir, { detail: `${res.plan.kind}:${res.plan.resource}<-${res.plan.template ?? ''}` });
-      }
-      outText(`\n${res.text}`);
-      return 0;
-    }
-
     case 'lib': {
       if (argv[1] !== 'search') {
         err('用法：repo-guard lib search <要什么>');
@@ -343,19 +268,6 @@ async function main(): Promise<number> {
       recordLibSearch(repoDir, intent);
       record('graph_query', repoDir, { detail: 'lib_search' });
       outText(`\n${appendDocsHint(renderLibSearch(info, intent, flagNumber(argv, "--limit", 5)), facts)}`);
-      return 0;
-    }
-
-    case 'contracts': {
-      const api = positionals(argv, 1)[0];
-      const handle = await getGraph(repoDir);
-      record('graph_query', repoDir, { detail: 'contracts' });
-      outText(
-        renderApiContractsAsTs(handle.graph, {
-          api,
-          minCallSites: flagNumber(argv, '--min-call-sites', 2),
-        }),
-      );
       return 0;
     }
 
@@ -391,33 +303,6 @@ async function main(): Promise<number> {
       const r = runGuardInit(repoDir, argv.includes('--write'));
       outText(r.text);
       return r.exitCode;
-    }
-
-    case 'conform': {
-      // 手动跑写后比对：计划取本会话（认领到的）similar 记录，改动取会话记录 ∪ git 工作区改动
-      const plans = similarPlans(repoDir).filter((p) => p.kind !== 'exists');
-      if (!plans.length) {
-        outText('本会话没有 similar 留下的参考计划（先 similar resource=<资源> 再写代码）。');
-        return 0;
-      }
-      const touched = [...new Set([...sessionTouchedFiles(repoDir), ...gitChangedFiles(repoDir)])];
-      const handle = await getGraph(repoDir);
-      const texts = plans
-        .map((p) => conform(handle.graph, p, touched))
-        .filter((r): r is NonNullable<typeof r> => r !== null)
-        .map(renderConform);
-      outText(texts.length ? `\n${texts.join('\n\n')}` : `本轮改动里还没有 ${plans.map((p) => p.resource).join('、')} 的新接口。`);
-      return 0;
-    }
-
-    case 'viz': {
-      if (argv.includes('--serve')) {
-        return serveViz(repoDir, flagNumber(argv, '--port', 7788), (s) => out(`${s}\n`));
-      }
-      const i = argv.indexOf('--out');
-      const r = await writeStaticViz(repoDir, i >= 0 ? argv[i + 1] : undefined);
-      outText(r.text);
-      return 0;
     }
 
     case 'governance': {
@@ -491,13 +376,18 @@ async function main(): Promise<number> {
           '  4 过程门禁     layers/process-gates/   ReAct 内机器关\n' +
           '  5 人审         layers/human-review/    T7b ask，默认关\n' +
           '  6 合并门禁     layers/merge-gates/     非 ReAct：CI / permissions.ask\n' +
-          '  7 图谱         layers/graph/ + src/graph/  MCP + require_tool；源码在本仓\n\n' +
+          '  7 图谱         layers/graph/ + code-atlas  atlas MCP + require_tool；引擎在 code-atlas\n\n' +
           '铺项目骨架：repo-guard layers init [--write]\n',
       );
       return 0;
     }
 
     default:
+      if (MOVED_TO_ATLAS.has(cmd)) {
+        err(`\`repo-guard ${cmd}\` 已移交 code-atlas，请用：atlas ${argv.join(' ')}`);
+        err('没装的话：npm i -g code-atlas');
+        return 2;
+      }
       err(`未知命令：${cmd}`);
       outText(HELP);
       return 2;

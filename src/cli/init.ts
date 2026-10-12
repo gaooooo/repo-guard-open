@@ -18,9 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { hotSpots } from '../graph/graph-builder.js';
-import type { CodeGraph } from '../graph/types.js';
-import { missingPublicLayerWarning, patternsMissingFromGraph } from '../engine/public-layer-audit.js';
+import { missingPublicLayerWarning, patternsMissingFromRepo } from '../engine/public-layer-audit.js';
 import { CONFIG_DIR, readJson } from '../runtime/paths.js';
 import {
   normalizePrefix,
@@ -29,9 +27,40 @@ import {
   writeFacts,
   type RepoFacts,
 } from '../runtime/repo-facts.js';
-import type { GraphHandle } from '../runtime/graph-cache.js';
-import { scan, type ScanResult } from './scan.js';
-import { RULE } from './render.js';
+import { RULE } from './text.js';
+
+/** `atlas scan --json` 里 init 用到的字段（与 code-atlas 的 ScanResult 相同） */
+export interface ScanResult {
+  lineLimit: number;
+  oversize: Array<{ file: string; lines: number }>;
+  cycles: string[][];
+}
+
+/** `atlas hot --json` 的一条热点 */
+export interface HotSpot {
+  file: string;
+  method?: string;
+  routeCount: number;
+}
+
+/**
+ * init 从 code-atlas 拿到的图谱信息。atlas 不可用时 available=false，
+ * 图谱相关推断（公共层、体量、循环依赖）整段跳过，其余体检照常。
+ */
+export interface AtlasInitInfo {
+  available: boolean;
+  version?: string | null;
+  workspace?: string;
+  repoId?: string;
+  role?: string;
+  stats?: { files?: number; nodes?: number; edges?: number };
+  /** 本次 init 是否把仓加进了工作区、花了多久 */
+  addedMs?: number;
+  /** atlas 可用但拿图谱失败时的原因 */
+  error?: string;
+  hot: HotSpot[] | null;
+  scan: ScanResult | null;
+}
 
 /** 一条体检发现。`action` 非空表示它在"照这个顺序做"里有对应动作 */
 interface Finding {
@@ -166,7 +195,7 @@ export interface PublicLayerGuess {
 }
 
 /**
- * 从图谱推测公共层。
+ * 从 code-atlas 的高扇入热点推测公共层。
  *
  * 判据是**扇入 + 层名**：被入口（页面 / 路由）引用得越多越像公共层，
  * 但目录名还得真的像一个层（见 LAYER_NAMES 的说明）。
@@ -175,12 +204,14 @@ export interface PublicLayerGuess {
  * `src/components/` 而不是 `src/components/DataTable/`——
  * 前者是人心里的"公共组件目录"，后者只是一个组件。粒度取错会让配置长到没人看。
  *
- * 为什么不含页面目录：页面是入口本身，没人引用它们，自然不会出现在 hotSpots 里。
+ * 为什么不含页面目录：页面是入口本身，没人引用它们，自然不会出现在热点里。
+ *
+ * 热点来自 `atlas hot --json --limit 200`（code-atlas 的 hotSpots，与原自带引擎同一算法）。
  * 这是"用扇入而不是用目录名关键词"的附带好处 —— 不用维护 views/pages 黑名单。
  */
-export function guessPublicLayer(graph: CodeGraph): PublicLayerGuess[] {
+export function guessPublicLayer(hot: HotSpot[]): PublicLayerGuess[] {
   const best = new Map<string, { file: string; count: number }>();
-  for (const s of hotSpots(graph, 200)) {
+  for (const s of hot) {
     const segs = s.file.split('/');
     if (segs.length < 3) continue; // 至少 `a/b/c` 才有"前两级目录"
     if (!LAYER_NAMES.has(segs[1].toLowerCase())) continue;
@@ -221,39 +252,40 @@ export interface InitOptions {
 
 export function renderInit(
   repoDir: string,
-  handle: GraphHandle,
-  scanResult: ScanResult,
+  atlas: AtlasInitInfo,
   opts: InitOptions,
 ): { text: string } {
-  const { graph } = handle;
   const checks = runChecks(repoDir);
   const existing = readFacts(repoDir);
-  const guesses = guessPublicLayer(graph);
+  const guesses = atlas.hot ? guessPublicLayer(atlas.hot) : [];
   const defaults = readFactsDefaults();
+  const scanResult = atlas.scan;
 
   // ── 头部：这个仓是什么 ──
-  const identify = handle.fromCache
-    ? `${graph.analyzer ?? '未识别'}（缓存）`
-    : `${graph.analyzer ?? '未识别'}（现建 ${(handle.buildMs / 1000).toFixed(1)} 秒）`;
-
-  const lines: string[] = [
-    '',
-    'repo-guard · 仓库体检',
-    RULE,
-    `仓库    ${path.basename(repoDir)}`,
-    `识别    ${identify}`,
-    `图谱    ${graph.stats.files} 个源文件 · ${graph.stats.routes} 个入口 · ${graph.stats.functions} 个符号`,
-    `盲区    ${(graph.blindSpots ?? []).length} 条（查询结果里会带出来）`,
-  ];
+  const lines: string[] = ['', 'repo-guard · 仓库体检', RULE, `仓库    ${path.basename(repoDir)}`];
+  if (!atlas.available) {
+    lines.push(
+      '图谱    未安装 code-atlas —— 跳过公共层推测与体量 / 循环依赖体检',
+      '        安装：npm i -g code-atlas（之后重跑 repo-guard init）',
+    );
+  } else if (atlas.error) {
+    lines.push(`图谱    code-atlas ${atlas.version ?? ''} 拿图谱失败，跳过图谱相关推断：${atlas.error}`);
+  } else {
+    const added = atlas.addedMs !== undefined ? `（本次加入，建索引 ${(atlas.addedMs / 1000).toFixed(1)} 秒）` : '';
+    lines.push(
+      `图谱    code-atlas ${atlas.version ?? ''} · 工作区 ${atlas.workspace ?? '?'} · 仓 ${atlas.repoId ?? '?'}${atlas.role ? `（${atlas.role}）` : ''}${added}`,
+      `规模    ${atlas.stats?.files ?? '?'} 个源文件 · ${atlas.stats?.nodes ?? '?'} 个节点 · ${atlas.stats?.edges ?? '?'} 条边`,
+    );
+  }
 
   // ── 发现的问题 ──
   const findings: Finding[] = [];
-  if (scanResult.oversize.length) {
+  if (scanResult?.oversize.length) {
     findings.push({
       text: `${scanResult.oversize.length} 个文件超过 ${scanResult.lineLimit} 行，最大 ${scanResult.oversize[0].lines} 行`,
     });
   }
-  if (scanResult.cycles.length) {
+  if (scanResult?.cycles.length) {
     findings.push({ text: `${scanResult.cycles.length} 处循环依赖` });
   }
   if (checks.isJs && !checks.hasLintScript) {
@@ -312,7 +344,7 @@ export function renderInit(
     // 看起来和"本次改动不涉及公共层"一模一样。更坏的是 SessionStart 还会照着
     // 这份清单注入指令，人以为有保护、模型以为有约束，实际两头都是空的。
     // 所以必须在这里显式报出来。
-    const missing = patternsMissingFromGraph(graph, existing.publicLayer);
+    const missing = patternsMissingFromRepo(repoDir, existing.publicLayer);
     const warn = missingPublicLayerWarning(missing);
     if (warn) lines.push('', `⚠ ${warn}`);
   }
@@ -327,7 +359,7 @@ export function renderInit(
   if (checks.isJs && !checks.hasLintConfig) {
     actions.push({
       title: '检查配置加体量规则（max-lines / complexity / import-no-cycle）',
-      why: scanResult.oversize.length
+      why: scanResult?.oversize.length
         ? `立刻会报出 ${scanResult.oversize.length} 个存量超长文件`
         : '防止以后堆肥',
     });
@@ -364,7 +396,8 @@ export function renderInit(
 
   const facts: RepoFacts = {
     version: 1,
-    analyzer: graph.analyzer ?? null,
+    // 分析器名由原自带引擎给出；code-atlas 不区分分析器，保留已有值，新仓留空（端探测退到目录特征）
+    analyzer: existing?.analyzer ?? null,
     // 已有配置时**不覆盖人确认过的清单**。人可能删掉了误判的目录、加了推测不到的目录，
     // 重跑 init 把它冲掉是不可接受的数据丢失。
     publicLayer: existing ? existing.publicLayer : guesses.map((g) => g.prefix),
@@ -393,6 +426,3 @@ export function renderInit(
 
   return { text: `${lines.join('\n')}\n` };
 }
-
-export { scan };
-export type { ScanResult };

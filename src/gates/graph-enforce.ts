@@ -29,7 +29,7 @@
 import {
   similarPlans, hasHotQueried, hasLibSearched, hasSimilarSearched } from '../runtime/session-state.js';
 import { componentDocsHint, readFacts } from '../runtime/repo-facts.js';
-import { crudFamiliesInSource, sameResource } from '../insight/similar-methods.js';
+import { crudFamiliesInSource, sameResource } from './naming.js';
 import type { GuardConfig } from './config.js';
 
 /** 路径是否命中任一模式。模式支持结尾 `**`、目录前缀、精确路径 */
@@ -100,7 +100,7 @@ export function judgeGraphEnforce(
       kind: 'need_similar',
       reason:
         `要新建 \`${rel}\`，但本轮还没查过仓里同类实现。\n` +
-        '先调 similar 工具（intent="要做什么"：前端如「带分页和搜索的列表页」，后端写资源名或方法名，如「AIMCredential」「DeleteAIMCredential」）。\n' +
+        '先调 code-atlas 的 atlas_reuse 工具（kind=similar，intent="要做什么"：前端如「带分页和搜索的列表页」，后端写资源名或方法名，如「AIMCredential」「DeleteAIMCredential」）。\n' +
         '平行再造一套写法的代价不在这次提交 —— 在半年后没人说得清这个仓有几种同类实现。',
     };
   }
@@ -118,7 +118,7 @@ export function judgeGraphEnforce(
           kind: 'need_similar_resource',
           reason:
             `要新建 \`${rel}\`，里面的 ${names} 属于「${unknown.map((f) => f.key).join('、')}」，但本轮 similar 查的是别的资源。\n` +
-            `先查这个资源：similar resource=<它的英文名> verbs=[…]，拿到参考家族和各层清单再写。\n` +
+            `先查这个资源：atlas_reuse kind=similar resource=<它的英文名> verbs=[…]，拿到参考家族和各层清单再写。\n` +
             '换一个资源就换一套参考 —— 照着 A 的结论写 B，正是平行再造的开始。',
         };
       }
@@ -138,7 +138,7 @@ export function judgeGraphEnforce(
       kind: 'need_hot',
       reason:
         `要新建组件 \`${rel}\`，但本轮还没查过仓里的高扇入热点。\n` +
-        '先调 hot 工具看有没有现成的可以复用 —— 被多个入口引用的组件通常就是你要造的那个。',
+        '先调 code-atlas 的 atlas_reuse 工具（不带 kind，intent=要写什么）看有没有现成的可以复用 —— 被多个入口引用的组件通常就是你要造的那个。',
     };
   }
 

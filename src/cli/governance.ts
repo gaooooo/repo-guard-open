@@ -15,7 +15,7 @@
 import path from 'node:path';
 
 import { readAll, type MetricRecord } from '../runtime/metrics.js';
-import { RULE } from './render.js';
+import { RULE } from './text.js';
 
 interface Bucket {
   deny: number;

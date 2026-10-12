@@ -1,5 +1,7 @@
 # 图谱可视化能力设计
 
+> **2026-10 起本文描述的自带图谱引擎 / 沙盘已删除，图谱由 code-atlas 提供（atlas CLI + MCP）。** 本文保留为历史设计记录。
+
 > 状态：**设计稿 v3**。不改打分、不改建图、不在 hook 里渲染。
 > 数据源：`<repo>/.codebuddy/.cache/{graph.json,meta.json}`。
 > 样例仓：`backend-agent-identity`（`go-trpc`）。

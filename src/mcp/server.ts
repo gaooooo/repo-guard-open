@@ -1,46 +1,31 @@
 /**
- * stdio MCP server —— 把图谱能力开放给 AI。
+ * stdio MCP server —— 把守卫自查能力开放给 AI：check / lib_search / audit。
+ *
+ * 图谱工具（impact / hot / similar / trace / contracts / scan）不在这里：由 code-atlas 的 MCP
+ * 提供（插件 .mcp.json 里同时注册了 code-atlas，AI 看到的是 mcp__code-atlas__atlas_*）。
+ * AI 调 atlas_impact 等之后的「查过」记录由 PostToolUse 钩子 post-atlas 写进会话状态。
  *
  * ── 工具描述是这个文件最重要的部分 ──
  * 描述不是文档，是**约束的载体**。模型看不到我们的设计意图，它只看到工具名和
  * 一句描述，然后决定调不调。所以每条描述都在回答"什么时候该调我"，
  * 而且把最容易犯的错直接写进去：
- *   · impact   → "影响面为 0 不等于可以删"
+ *   · check      → "configured=false 时没命中不等于安全"
  *   · lib_search → "内部组件库不在你的训练数据里，凭 antd 经验写的 props 几乎一定是错的"
- *   · contracts → "必须人工 review，不能当成仓里已经有的类型"
  * 这些话如果只写在 README 里，模型永远看不到。
- *
- * ── 为什么 impact 要记状态 ──
- * `pre-write` 钩子放行的唯一依据是"本会话查过这个文件"。所以 impact 被调用时
- * 必须把文件记进会话状态，否则守卫就是死循环：拦 → AI 去查 → 回来还是被拦。
  *
  * ── 协议实现为什么这么薄 ──
  * 只实现 initialize / tools/list / tools/call 三个方法。MCP 还有 resources、
  * prompts、sampling，但这个 server 只提供工具，声明多余的能力只会让宿主
  * 去调然后拿到错误。
  */
-import { renderApiContractsAsTs, type ReportContext } from '../graph/graph-report.js';
 import { auditPolicy, formatAuditReport } from '../engine/policy-audit.js';
-import { findRepoRoot, splitFileSymbol, toRepoRelative } from '../runtime/paths.js';
-import { DEFAULT_LINE_LIMIT, readFacts, componentDocsHint } from '../runtime/repo-facts.js';
+import { findRepoRoot } from '../runtime/paths.js';
+import { readFacts, componentDocsHint } from '../runtime/repo-facts.js';
 import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
-import { getGraph, type GraphHandle } from '../runtime/graph-cache.js';
 import { judge, missingConfig } from '../runtime/guard.js';
-import {
-  recordSimilarPlan,
-  adoptSessionFor,
-  recordHotQuery,
-  recordLibSearch,
-  recordQueried,
-  recordSimilarSearch,
-} from '../runtime/session-state.js';
+import { adoptSessionFor, recordLibSearch } from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
 import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
-import { renderHotMcp, renderImpactCli, renderReuseFor } from '../cli/render.js';
-import { traceOrMiss } from '../cli/trace.js';
-import { renderScanMcp, scan } from '../cli/scan.js';
-import { runSimilar, verbsArg } from '../cli/similar.js';
-import path from 'node:path';
 
 const SERVER_NAME = 'repo-guard';
 const PROTOCOL_VERSION = '2024-11-05';
@@ -53,39 +38,9 @@ interface ToolDef {
 
 const TOOLS: ToolDef[] = [
   {
-    name: 'impact',
-    description:
-      '改一个已有文件之前问：改它会波及哪些页面和接口。返回直接调用者、依赖模块、受影响入口（带强弱分数）和图谱盲区。只改某个方法或结构体字段时带上 symbol，结果按符号收窄。影响面为 0 不等于可以删。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        file: { type: 'string', description: '仓库根相对路径，也可写成 file#symbol' },
-        symbol: { type: 'string', description: '可选：方法名或结构体字段名，如 DescribeAgent、ID、Agent.ID' },
-      },
-      required: ['file'],
-    },
-  },
-  {
-    name: 'hot',
-    description:
-      '写新方法、工具函数或公共组件之前问：仓里有没有现成的，别重复造轮子。带 intent（要写什么）时按方法名与注释找相关的现成方法、按被调用次数排序；不带时返回全仓被最多入口依赖的热点（改它们前先 impact）。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        intent: { type: 'string', description: '可选：要写什么，如「查询租户配置」「EscapeRegex」「校验 token」' },
-        limit: { type: 'number', description: '条数，默认 10（带 intent 时默认 8）' },
-      },
-    },
-  },
-  {
-    name: 'scan',
-    description: '仓库体量与结构体检：超过行数上限的文件、循环依赖。',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
     name: 'check',
     description:
-      '改完自查：给出改动涉及的文件，返回是否碰公共层、是否命中红线。若 configured=false，说明本仓还没配规则，没命中不等于安全。',
+      '改完自查：给出改动涉及的文件，返回是否碰公共层、是否命中红线。若 configured=false，说明本仓还没配规则，没命中不等于安全。碰到公共层的已有文件，改之前先用 code-atlas 的 atlas_impact 查影响面。',
     inputSchema: {
       type: 'object',
       properties: { files: { type: 'array', items: { type: 'string' } } },
@@ -93,35 +48,9 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: 'trace',
-    description:
-      '这个页面或接口实际打到哪里：入口 → 处理函数 → 下游服务 → 调用的后端接口。前端仓还会带上从调用点反推的出入参字段——写调用前按它对齐，不要凭字段名猜。',
-    inputSchema: {
-      type: 'object',
-      properties: { urlPath: { type: 'string', description: '接口或页面路径' } },
-      required: ['urlPath'],
-    },
-  },
-  {
-    name: 'similar',
-    description:
-      '写新页面或新接口之前问：这类东西本仓已经有没有、怎么写的。前端返回同类页骨架；后端返回同一资源的方法家族、按动作逐项核对（已有 / 没有）、分层骨架，本仓没有该资源时借最完整的增删改查家族当模板。' +
-      '后端调用前先把需求拆开：「开发用户管理，包括新增、修改、删除」→ resource=User，verbs=[Create, Modify, Delete]。照着写，不要平行再造一套。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        intent: { type: 'string', description: '要做什么，原话即可。前端如「带分页和搜索的列表页」；后端也可直接写方法名，如「DeleteAIMCredential」' },
-        resource: { type: 'string', description: '后端：英文资源名，按本仓命名风格，如 User、AIMCredential；拿不准可用逗号给多个候选。不用管前缀，查 User 也会命中 AIMUser' },
-        verbs: { type: 'array', items: { type: 'string' }, description: '后端：要做的动作，Create / Modify / Delete / Describe（Add、Update、Remove、Get 等会归一）' },
-        template: { type: 'string', description: '后端：指定参考家族。上次返回的候选里第 1 个不是最像的时，填你选的家族名再查一次，拿到按它推导的新建清单' },
-        limit: { type: 'number' },
-      },
-    },
-  },
-  {
     name: 'lib_search',
     description:
-      '写新的公共组件之前问：本仓 UI 组件库里有没有现成的。内部组件库不在你的训练数据里，凭 antd / MUI 经验写的 props 几乎一定是错的。',
+      '写新的公共组件之前问：本仓 UI 组件库里有没有现成的。内部组件库不在你的训练数据里，凭 antd / MUI 经验写的 props 几乎一定是错的。仓内已有的同类实现用 code-atlas 的 atlas_reuse 查。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -137,28 +66,7 @@ const TOOLS: ToolDef[] = [
       '体检本仓红线还准不准：protects 的符号是不是已经改名或删了（规则在守空气）、paths 有没有漏掉符号实际出现的位置（有后门）、evidence 的行号还指不指得对。人写的指针必然腐烂，这是机器验完整性。',
     inputSchema: { type: 'object', properties: {} },
   },
-  {
-    name: 'contracts',
-    description:
-      '从调用点反推生成接口出入参的 TS 类型草稿。必须人工 review 后才能落库，不能当成仓里已经有的类型。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        api: { type: 'string', description: '只导这一条' },
-        minCallSites: { type: 'number', description: '默认 2，只导高频接口' },
-      },
-    },
-  },
 ];
-
-function ctxOf(repoDir: string, handle: GraphHandle): ReportContext {
-  return {
-    repoName: path.basename(repoDir),
-    localPath: repoDir,
-    commitSha: handle.headSha,
-    indexedAt: handle.builtAt,
-  };
-}
 
 function num(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
@@ -167,62 +75,15 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
-export interface CallOptions {
-  /**
-   * 默认 true。false = 只算不记：不写会话状态、不写埋点。
-   * 给可视化沙盘用 —— 人在图上点一下「查影响面」不能被守卫当成 AI 查过而放行，
-   * 也不能混进「AI 真实调用了多少次图谱」的统计里。
-   */
-  sideEffects?: boolean;
-  /** 仓库根。缺省从 cwd 推（MCP 场景）；沙盘服务显式传 */
-  repoDir?: string;
-}
-
-export async function callTool(
-  name: string,
-  args: Record<string, unknown>,
-  opts: CallOptions = {},
-): Promise<string> {
-  const repoDir = opts.repoDir ?? findRepoRoot(process.cwd());
-  const live = opts.sideEffects !== false;
+export async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  const repoDir = findRepoRoot(process.cwd());
   // 宿主不给 MCP 进程会话 id：按仓认领钩子记下的当前会话，否则查了也连不上写前守卫
-  if (live) adoptSessionFor(repoDir);
+  adoptSessionFor(repoDir);
   const track = (event: Parameters<typeof record>[0], extra?: Parameters<typeof record>[2]) => {
-    if (live) record(event, repoDir, extra);
+    record(event, repoDir, extra);
   };
 
   switch (name) {
-    case 'impact': {
-      const { file: rawFile, symbol } = splitFileSymbol(str(args.file), str(args.symbol));
-      const rel = toRepoRelative(repoDir, rawFile);
-      // 路径不在仓库里要说清楚。模型拿到空结果会当成"没有影响"，
-      // 而真相是"我们压根没查"
-      if (!rel) return '路径不在仓库里。';
-      const handle = await getGraph(repoDir);
-      // 记状态必须在渲染之前 —— 渲染抛异常时状态也该记上，
-      // 否则模型明明查了却还是被拦，会陷入死循环。
-      // 带 symbol 时仍按文件记：守卫的粒度是文件
-      if (live) recordQueried(repoDir, rel);
-      track('graph_query', { file: rel, detail: symbol ? 'impact_symbol' : 'impact' });
-      return renderImpactCli(handle.graph, rel, symbol);
-    }
-
-    case 'hot': {
-      const handle = await getGraph(repoDir);
-      const intent = str(args.intent);
-      if (live) recordHotQuery(repoDir);
-      track('graph_query', { detail: intent ? 'hot_intent' : 'hot' });
-      if (intent) return renderReuseFor(handle.graph, intent, num(args.limit, 8));
-      return renderHotMcp(handle.graph, num(args.limit, 10));
-    }
-
-    case 'scan': {
-      const handle = await getGraph(repoDir);
-      const facts = readFacts(repoDir);
-      track('graph_query', { detail: 'scan' });
-      return renderScanMcp(scan(repoDir, handle.graph, facts?.lineLimit ?? DEFAULT_LINE_LIMIT));
-    }
-
     case 'check': {
       const files = Array.isArray(args.files)
         ? args.files.filter((x): x is string => typeof x === 'string')
@@ -258,38 +119,12 @@ export async function callTool(
       return lines.join('\n');
     }
 
-    case 'trace': {
-      const urlPath = str(args.urlPath);
-      if (!urlPath) return '缺少 urlPath。';
-      const handle = await getGraph(repoDir);
-      track('graph_query', { detail: 'trace' });
-      return traceOrMiss(handle.graph, urlPath, ctxOf(repoDir, handle));
-    }
-
-    case 'similar': {
-      const intent = str(args.intent);
-      const resource = str(args.resource);
-      const verbs = verbsArg(args.verbs);
-      if (!intent && !resource) return '缺少 intent 或 resource。';
-      const handle = await getGraph(repoDir);
-      if (live) recordSimilarSearch(repoDir, intent || resource);
-      track('graph_query', { detail: resource ? 'similar_resource' : 'similar' });
-      const template = str(args.template) || undefined;
-      const out = runSimilar(handle.graph, { intent, resource, verbs, template, limit: num(args.limit, 3) }, ctxOf(repoDir, handle));
-      if (out.plan) {
-        if (live) recordSimilarPlan(repoDir, out.plan);
-        // detail 串起「查的什么 → 参考了谁」：回放与效能统计按它还原 AI 的选择
-        track('similar_plan', { detail: `${out.plan.kind}:${out.plan.resource}<-${out.plan.template ?? ''}${template ? '(指定)' : ''}` });
-      }
-      return out.text;
-    }
-
     case 'lib_search': {
       const intent = str(args.intent);
       if (!intent) return '缺少 intent。';
       const facts = readFacts(repoDir);
       const info = loadLibrary(repoDir, facts?.componentLibrary ?? null);
-      if (live) recordLibSearch(repoDir, intent);
+      recordLibSearch(repoDir, intent);
       track('graph_query', { detail: 'lib_search' });
       const docs = componentDocsHint(facts);
       if (!info.pkg) {
@@ -319,16 +154,6 @@ export async function callTool(
       }
       track('graph_query', { detail: 'audit' });
       return formatAuditReport(auditPolicy(loadRedlines(repoDir), repoDir));
-    }
-
-    case 'contracts': {
-      const handle = await getGraph(repoDir);
-      track('graph_query', { detail: 'contracts' });
-      // 这份渲染自带尾换行（它输出的是一段 .ts 源码草稿），不要再补
-      return renderApiContractsAsTs(handle.graph, {
-        api: str(args.api) || undefined,
-        minCallSites: num(args.minCallSites, 2),
-      });
     }
 
     default:
@@ -380,7 +205,7 @@ async function handle(req: RpcRequest): Promise<void> {
       } catch (e) {
         // 工具内部错误要作为**正常结果**返回而不是 JSON-RPC error。
         // 返回 error 时宿主通常只显示一句"工具调用失败"，模型拿不到可行动的信息；
-        // 作为文本返回它至少知道是路径不对还是仓库没建图。
+        // 作为文本返回它至少知道哪里不对。
         text = `repo-guard 执行失败：${(e as Error).message}`;
       }
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }] } });
@@ -404,7 +229,7 @@ async function handle(req: RpcRequest): Promise<void> {
  *
  * stdio MCP 的宿主把 `initialize` 写进来之后就等响应，**不关闭 stdin**。
  * 而 readFileSync(0) 要等 EOF 才返回。于是宿主等我回复、我等 EOF，双方僵死，
- * 宿主界面上永远显示"服务仍在连接中"，9 个工具一个都不出现。
+ * 宿主界面上永远显示"服务仍在连接中"，工具一个都不出现。
  *
  * 这个 bug 在脚本测试里**测不出来**：`printf ... | repo-guard mcp` 的管道
  * 写完就 EOF，同步读立刻返回，一切正常。只有真机装一次才会暴露。
@@ -417,7 +242,7 @@ async function handle(req: RpcRequest): Promise<void> {
 export async function runMcp(): Promise<number> {
   return new Promise((resolve) => {
     let buf = '';
-    /** 串行化处理：工具调用里有 await（建图），不排队的话回复顺序会乱 */
+    /** 串行化处理：工具调用是 async 的，不排队的话回复顺序会乱 */
     let chain: Promise<void> = Promise.resolve();
 
     const feed = (line: string): void => {

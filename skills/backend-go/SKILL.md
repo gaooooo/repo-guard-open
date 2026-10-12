@@ -22,7 +22,7 @@ Go 后端全链路：服务架构、API 契约、数据持久化、并发与性�
 3. **接口在消费侧定义**，依赖方向单向：`handler → service → repository → domain`。
 4. **并发第一原则**：每个 goroutine 必有 `ctx` 入口与**退出路径**。
 5. **错误显式处理**，wrap 用 `%w`，区分可重试与不可重试。
-6. **改公共层先算影响面**。见 `code-impact` 技能。
+6. **改公共层先算影响面**。调 code-atlas 的 `atlas_impact`（target=`文件#符号`），终端里用 `atlas impact <文件#符号>`；新写接口前先 `atlas_reuse`（kind=similar，resource / verbs）看同类实现怎么写的。
 
 ## 两条硬约束
 

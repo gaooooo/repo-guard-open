@@ -104,11 +104,6 @@ export function configPath(repoDir: string, ...sub: string[]): string {
   return path.join(repoDir, CONFIG_DIR, ...sub);
 }
 
-/** `<repo>/.codebuddy/.cache/<sub>` */
-export function cachePath(repoDir: string, ...sub: string[]): string {
-  return path.join(repoDir, CONFIG_DIR, '.cache', ...sub);
-}
-
 /**
  * 本机状态根目录。
  *
@@ -197,36 +192,6 @@ function realpathOrSelf(p: string): string {
     }
   }
   return abs;
-}
-
-/**
- * 本产物自己的绝对路径。
- *
- * ── 为什么需要它 ──
- * 拒绝文案里要告诉模型"去跑 repo-guard impact xxx"。但**裸命令 `repo-guard`
- * 不一定可用**：宿主只把 `--plugin-dir` 加载的插件的 `bin/` 注入 PATH
- *（实现里读的是 `pluginDir`），市场安装的插件不注入。
- * 官方文档那句「启用插件时此目录中的文件可作为裸命令调用」只在前一种模式下成立。
- *
- * 真机实测踩过这个：文案给了 `repo-guard impact <file>`，模型跑完得到
- * `command not found`，然后得出结论"这不是命令行工具"，转而用 grep 凑影响面。
- * 又一次"守卫拦住了，却把模型推向更差的替代方案"。
- *
- * 所以给绝对路径。两种安装方式下都对。
- */
-export function selfPath(): string {
-  // argv[1] 是被执行的脚本路径。`node bin/repo-guard` 与 `./bin/repo-guard`
-  // 两种调法下都是它
-  const fromArgv = process.argv[1];
-  if (fromArgv && fromArgv.trim()) {
-    try {
-      return fs.realpathSync(fromArgv);
-    } catch {
-      return path.resolve(fromArgv);
-    }
-  }
-  // 兜底：打包成 CJS 之后 __filename 就是产物自己
-  return typeof __filename === 'string' ? __filename : 'repo-guard';
 }
 
 /** 读 JSON，任何失败都返回 null。配置坏了不能让工具崩 */

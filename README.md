@@ -1,10 +1,10 @@
 # repo-guard
 
-> 仓库体检与影响面守卫。**零服务端**——不连任何服务、不需要令牌，图谱从本仓代码现算并缓存本地，规则读仓库文件。
+> 仓库体检与影响面守卫。**零服务端**——不连任何服务、不需要令牌，规则读仓库文件。**图谱由 [code-atlas](../code-atlas) 提供**（`atlas` CLI + MCP，`npm i -g code-atlas`）。
 
 装完之后 AI 会做三件它以前不做的事：改公共层代码**之前**先确认影响面、写完超长文件会被提醒、想绕道用 `sed` 写公共层会被记一笔。
 
-开发者按七层往 [`layers/`](layers/) 添加内容（工程事实 / 技能库 / 红线 / 过程门禁 / 人审 / 合并门禁 / 图谱）。分层说明见 [`docs/PLUGIN-LAYERS.md`](docs/PLUGIN-LAYERS.md)。图谱源码在 [`src/graph/`](src/graph/)，见 [`docs/GRAPH-SPLIT.md`](docs/GRAPH-SPLIT.md)。
+开发者按七层往 [`layers/`](layers/) 添加内容（工程事实 / 技能库 / 红线 / 过程门禁 / 人审 / 合并门禁 / 图谱）。分层说明见 [`docs/PLUGIN-LAYERS.md`](docs/PLUGIN-LAYERS.md)。图谱不在本仓：由 code-atlas 提供，见下方「图谱由 code-atlas 提供」。
 
 ---
 
@@ -94,14 +94,9 @@ repo-guard standards audit                     # 体检：有没有守空气、�
 | 命令 | 干什么 |
 |---|---|
 | `init [--write]` | 体检 + 生成配置 |
-| `scan` | 体量与结构：超长文件、循环依赖。**有问题非零退出**，可挂 CI |
+| `scan` | 体量与结构：超长文件、循环依赖（转调 `atlas scan`）。**有问题非零退出**，可挂 CI |
 | `check <文件…>` | 改动自查：碰没碰公共层和红线 |
-| `impact <文件>` | 改它会波及哪些入口 |
-| `hot [--limit N]` | 高扇入热点，写新组件前看有没有现成的 |
-| `trace <路径>` | 这个页面/接口打到哪里：入口 → 处理函数 → 下游 → 后端接口，**含从调用点反推的出入参** |
-| `similar <要做什么>` | 这类页面本仓已经怎么写了，返回同类页骨架 |
 | `lib search <要什么>` | 本仓 UI 组件库里有没有现成的 |
-| `contracts [接口]` | 反推导出接口类型草稿（**必须人工 review，不能当已有类型**） |
 | `audit` | **红线体检**：规则在不在守空气、paths 有没有后门、evidence 还准不准 |
 | `redlines init [--write]` | 把部门红线模板铺进 `.codebuddy/redlines.json` |
 | `doctor` | **配置体检**：JSON 坏没坏、条目会不会静默失效、注入配额还剩多少 |
@@ -113,6 +108,8 @@ repo-guard standards audit                     # 体检：有没有守空气、�
 | `standards audit` | **规范体检**：有没有守空气、有没有被静默降级、项目层放宽有没有留理由 |
 | `mcp` | 作为 stdio MCP 给 AI 用（宿主自动拉起，不用手动跑） |
 | `hook <name>` | 插件钩子（宿主调用） |
+
+图谱命令 `impact / hot / trace / similar / contracts / conform / viz` 已移交 code-atlas，用同名的 `atlas <命令>`。
 
 挂进流水线：
 
@@ -181,17 +178,18 @@ npm run pack        # = npm run check + 打包，产出 dist/repo-guard-<版本>
 
 ```bash
 bin/repo-guard doctor       # 配置体检
-node bin/verify-hooks.mjs   # 58 条钩子回归，确认填的红线没把正常写文件也拦了
+node bin/verify-hooks.mjs   # 83 条钩子回归，确认填的红线没把正常写文件也拦了（图谱相关几条需要 atlas）
 ```
 
 部门可以在条目上写 `override_policy: "locked"` 限定各项目能改到什么程度。
 
 | 目录 | 是什么 |
 |---|---|
-| `src/graph/` / `src/engine/` | 图谱引擎 / 红线判定。禁止改打分，见 PORTING.md |
-| `src/runtime/` | 仓库定位、配置读写、图谱缓存、会话状态、埋点 |
-| `src/cli/` `src/hooks/` `src/mcp/` | 三个入口。共用一个二进制，因为它们要共享图谱缓存与会话状态 |
-| `build/` | 构建脚本 + `baseline/`（改造前的产物，逐字节比对的黄金样本，**不能删**） |
+| `src/engine/` | 红线判定。禁止改打分，见 PORTING.md |
+| `src/atlas/` | 调外部 `atlas` CLI 的客户端（图谱全部来自 code-atlas） |
+| `src/runtime/` | 仓库定位、配置读写、会话状态、埋点 |
+| `src/cli/` `src/hooks/` `src/mcp/` | 三个入口。共用一个二进制，因为它们要共享会话状态 |
+| `build/` | 构建、打包脚本与 init 回归 |
 | `layers/process-gates/` | 协作全景七道门的配置骨架，全部默认关 |
 | `layers/skills/standards/` | 五端研发规范标准模板（全局层），`src/standards/` 是它的加载与合并 |
 
@@ -200,50 +198,24 @@ node bin/verify-hooks.mjs   # 58 条钩子回归，确认填的红线没把正�
 
 ---
 
-## 影响面是怎么算的
+## 图谱由 code-atlas 提供
 
-```
-① 直接调用者 —— 图谱里谁调了它
-② 沿反向依赖走，最多 3 跳
-③ 落到入口上：处理文件在传播集里，或处理函数直接调了目标
-```
+repo-guard 不再自带图谱引擎。影响面、同类实现、热点、接口契约、体量体检、写后比对、可视化全部由 code-atlas 提供：
 
-打分：`分数 = 上一跳 × 边权 × 0.6`，多路径取最强。
-
-| 边类型 | 权重 |
+| 谁用 | 怎么用 |
 |---|---|
-| 函数调用 / JSX 引用 | 1.0 |
-| 继承 | 0.9 |
-| 调后端接口 | 0.6 |
-| 模块 import | 0.5（import 了不代表真用了） |
+| AI | 插件 `.mcp.json` 同时注册了 `code-atlas` MCP，工具名 `mcp__code-atlas__atlas_impact / atlas_trace / atlas_explore / atlas_reuse / atlas_contracts / atlas_workspace` |
+| 人 | `atlas impact <文件#符号>`、`atlas hot`、`atlas similar`、`atlas trace`、`atlas viz --open` 等 |
+| 钩子 | 子进程调 `atlas … --json --cache-only`（钩子里禁止建图，缓存缺失就放行） |
 
-**≥ 0.5 算强影响**：直接调用 `1.0×0.6=0.6` 过线，两跳 import 约 0.09 不过线。
+守卫怎么知道 AI「查过了」：PostToolUse 钩子 `post-atlas` 在 AI 调完 `atlas_impact / atlas_reuse / atlas_trace` 后把查过的文件 / 资源记进会话状态；
+AI 在终端里跑 `atlas impact|similar|hot` 时由 `post-bash` 识别。Stop 时的写后比对调 `atlas conform`。
 
-> ⚠️ **影响面为 0 不等于可以删。** 每次查询都附盲区清单——动态 import、样式引用、运行时拼接的路径都看不见；SQL、离线任务、其它服务完全在图谱之外。
+- 安装：`npm i -g code-atlas`。`repo-guard init` 发现本仓不在 atlas 工作区时会先 `atlas add` 建索引。
+- 没装 atlas：会话开始会明说「图谱相关守卫未生效」；公共层守卫照常拦，但 AI 查不了影响面。
+- 测试或未全局安装时可设 `REPO_GUARD_ATLAS_BIN=<code-atlas>/bin/atlas`。
 
----
-
-## 图谱缓存
-
-存 `.codebuddy/.cache/`，`init --write` 会自动加进 `.gitignore`。
-
-**什么时候重建**（两条判据都会触发）：
-
-- git HEAD 变了 —— 切分支、拉新代码
-- **源文件最大 mtime 变了** —— 管的是"改了还没提交"
-
-第二条很重要：你刚改完还没提交时，图谱必须跟着更新，否则查出来的是旧答案。
-
-图谱是代码的**投影**，删了重跑结果一模一样，所以不进 git、不用备份。红线不一样——那是人写的意图，丢了就永久损失。
-
----
-
-## 支持的技术栈
-
-前端（React / Vue）· Node / TypeScript · Go（Gin、tRPC）· Java（Spring）· Python
-
-**所有分析器置信度都不够时，明确报「暂不支持这个技术栈」，不给空图。**
-空图是最坏的失败模式：AI 会把"没有调用者"当成事实去删。
+> ⚠️ **影响面为 0 不等于可以删。** 动态 import、样式引用、运行时拼接的路径、SQL、离线任务、其它服务都可能在图谱之外。
 
 ---
 

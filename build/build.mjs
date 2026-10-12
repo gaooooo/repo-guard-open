@@ -9,9 +9,9 @@
  * 而 hook 只有 5~15 秒预算，装依赖必然超时。
  *
  * ── 为什么是 CJS 而不是 ESM ──
- * `@babel/traverse` 是 CJS，ESM 下 default interop 会变成 `{ default: fn }`；
- * 源码里已经写了 `.default ?? _traverse` 兜底，但打成 CJS 能少一层不确定性。
- * 另外 CJS 单文件不依赖文件扩展名推断，`node bin/repo-guard`（无后缀）直接能跑。
+ * CJS 单文件不依赖文件扩展名推断，`node bin/repo-guard`（无后缀）直接能跑。
+ *
+ * 图谱引擎不在产物里：由外部 code-atlas（`atlas` CLI + MCP）提供，见 src/atlas/client.ts。
  *
  * 用法：
  *   node build/build.mjs            # 压缩，产物写 bin/repo-guard
@@ -32,71 +32,11 @@ const DEV = argv.includes('--dev');
 const ENTRY = path.join(ROOT, 'src', 'cli', 'index.ts');
 const OUT = path.resolve(flag('--out') ?? path.join(ROOT, 'bin', 'repo-guard'));
 
-/**
- * py_graph.py 与 py-graph-source.ts 的内嵌字符串必须一致。
- *
- * Python 分析器走子进程：`python3 <临时文件> <repoDir>`，而临时文件的内容来自
- * 内嵌字符串（打包器不复制非 JS 资源，读文件在打包产物里必然 ENOENT —— 这条
- * 教训在 deerclaw 的 python-ast.ts 文件头写着）。两份一旦漂移，症状是
- * "Python 仓突然建不出图"，而 hook 层 fail-open 会把它吞掉，只表现为图谱变空。
- * 空图是最坏的失败模式：模型会把"没有调用者"当事实去删代码。所以这里硬失败。
- */
-function assertPySourceInSync() {
-  const py = path.join(ROOT, 'src', 'graph', 'analyzers', 'py_graph.py');
-  const ts = path.join(ROOT, 'src', 'graph', 'analyzers', 'py-graph-source.ts');
-  if (!fs.existsSync(py) || !fs.existsSync(ts)) {
-    console.error(`[build] 缺文件，无法校验 Python 分析器一致性：\n  ${py}\n  ${ts}`);
-    process.exit(1);
-  }
-  const want = fs.readFileSync(py, 'utf-8');
-  // 内嵌形式是 `export const PY_GRAPH_SOURCE: string = "...";`，用 JSON.parse 还原
-  const m = fs.readFileSync(ts, 'utf-8').match(/PY_GRAPH_SOURCE[^=]*=\s*("(?:[^"\\]|\\.)*")/s);
-  if (!m) {
-    console.error('[build] py-graph-source.ts 里找不到 PY_GRAPH_SOURCE 字符串字面量');
-    process.exit(1);
-  }
-  let got;
-  try {
-    got = JSON.parse(m[1]);
-  } catch (e) {
-    console.error(`[build] PY_GRAPH_SOURCE 不是合法的 JSON 字符串字面量：${e.message}`);
-    process.exit(1);
-  }
-  if (got !== want) {
-    console.error(
-      '[build] py_graph.py 与 py-graph-source.ts 的内嵌内容不一致。\n' +
-        '        改了 .py 就要同步内嵌字符串（用 build/sync-py-source.mjs）。',
-    );
-    process.exit(1);
-  }
-}
-
-/**
- * 可视化页面的 echarts。拷进 assets/viz/vendor/ 并**提交进 git**（与 bin/repo-guard 同策略）：
- * 用户拿到插件不跑 npm install，内网也不能走 CDN。
- * 不打进 bin/repo-guard —— 1MB 的渲染库进主产物会拖慢每一次 hook 启动。
- */
-function copyEcharts() {
-  const src = path.join(ROOT, 'node_modules', 'echarts', 'dist', 'echarts.min.js');
-  const dst = path.join(ROOT, 'assets', 'viz', 'vendor', 'echarts.min.js');
-  if (!fs.existsSync(src)) {
-    if (fs.existsSync(dst)) return; // 没装依赖但已有提交的副本：沿用
-    console.error('[build] 找不到 node_modules/echarts。先跑 `npm install`。');
-    process.exit(1);
-  }
-  fs.mkdirSync(path.dirname(dst), { recursive: true });
-  const a = fs.readFileSync(src);
-  if (fs.existsSync(dst) && Buffer.compare(a, fs.readFileSync(dst)) === 0) return;
-  fs.writeFileSync(dst, a);
-  console.log(`[build] ${path.relative(ROOT, dst)}  ${(a.length / 1024).toFixed(0)} KB`);
-}
-
 function main() {
   if (!fs.existsSync(ENTRY)) {
     console.error(`[build] 找不到入口：${ENTRY}`);
     process.exit(1);
   }
-  assertPySourceInSync();
 
   const esbuild = path.join(ROOT, 'node_modules', '.bin', 'esbuild');
   if (!fs.existsSync(esbuild)) {
@@ -134,7 +74,6 @@ function main() {
     process.exit(1);
   }
 
-  copyEcharts();
 
   const kb = (fs.statSync(OUT).size / 1024).toFixed(0);
   console.log(`[build] ${path.relative(ROOT, OUT)}  ${kb} KB  ${DEV ? '（dev，未压缩）' : ''}`);
