@@ -11,7 +11,8 @@
     "── timeout 单位是秒 ──",
     "宿主实现是 `(timeout ?? 60) * 1000`，默认 60 秒。",
     "内部市场有插件写 120000（以为是毫秒），那等于 33 小时，相当于没有超时。",
-    "这里的预算按『钩子里只读缓存、永不建图』来定：写前判定 15 秒，其余 5 秒（图谱查 atlas --cache-only）。",
+    "钩子本身通常 0.1~0.5 秒（只读缓存、永不建图），但预算要按『机器忙的时候』给：A/B 实测三个会话并行时，",
+    "提问钩子被拖到 10 秒以上，宿主把超时当成拦截，用户的提问整个被吞掉。所以一律留足（15~30 秒），宁可慢、不可拦。",
     "",
     "── matcher 必须同时覆盖两套工具名 ──",
     "CLI 形态的工具叫 Write / Edit / MultiEdit / NotebookEdit；",
@@ -33,7 +34,7 @@
             "type": "command",
             "description": "注入公共层目录、行数上限、盲区提醒",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook session-start",
-            "timeout": 15
+            "timeout": 30
           }
         ]
       }
@@ -47,7 +48,7 @@
             "type": "command",
             "description": "按任务类型注入必读清单",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook user-prompt-submit",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }
@@ -62,7 +63,7 @@
             "type": "command",
             "description": "公共层写前守卫 + 红线附带提示",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook pre-write",
-            "timeout": 15
+            "timeout": 20
           }
         ]
       },
@@ -74,7 +75,7 @@
             "type": "command",
             "description": "shell 旁路写公共层提醒 + 计数",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook pre-bash",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -89,7 +90,7 @@
             "type": "command",
             "description": "超长文件提醒 + L3 计数器",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-write",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -101,7 +102,7 @@
             "type": "command",
             "description": "L3 计数器（命令）+ 识别终端里的 atlas impact/similar/hot",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-bash",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -113,7 +114,7 @@
             "type": "command",
             "description": "记录 atlas 图谱查询（会话状态 + 埋点）",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-atlas",
-            "timeout": 10
+            "timeout": 20
           }
         ]
       }
@@ -127,7 +128,7 @@
             "type": "command",
             "description": "L3 失败计数器",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-fail",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -156,7 +157,7 @@
             "type": "command",
             "description": "落收尾埋点，清理 7 天前的会话状态",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook session-end",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -170,7 +171,7 @@
             "type": "command",
             "description": "交付校验提醒（默认关）+ 长会话迭代摘要",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook stop",
-            "timeout": 15
+            "timeout": 20
           }
         ]
       }
@@ -213,7 +214,7 @@
             "type": "command",
             "description": "压缩后重新注入公共层清单与约束",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-compact",
-            "timeout": 10
+            "timeout": 20
           }
         ]
       }
