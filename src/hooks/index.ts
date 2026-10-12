@@ -28,11 +28,12 @@
  * 明确表达了"按它办"，把摘要推给模型是那份配置本来的语义（deerclaw 侧红线
  * 摘要一直是【推】）。这一处差异已登记在 parity 的 KNOWN_DEVIATIONS 里。
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { findRepoRoot, repoForPath, sessionRepos, toRepoRelative } from '../runtime/paths.js';
+import { findRepoRoot, repoForPath, repoId, sessionRepos, toRepoRelative } from '../runtime/paths.js';
 import { countLines, readFacts, type RepoFacts } from '../runtime/repo-facts.js';
 import { loadRedlines } from '../runtime/redlines.js';
 import { judge, denyReason, shouldBlock } from '../runtime/guard.js';
@@ -217,6 +218,17 @@ function bashCwd(input: HookInput, cmd: string): string {
     return fs.statSync(abs).isDirectory() ? abs : cwd;
   } catch {
     return cwd;
+  }
+}
+
+/** 文件在 HEAD 里有几行。新文件、不是 git 仓、git 不可用 → null（按「这次写超的」处理） */
+function headLines(repoDir: string, rel: string): number | null {
+  try {
+    const r = spawnSync('git', ['-C', repoDir, 'show', `HEAD:${rel}`], { encoding: 'utf-8', timeout: 3000, maxBuffer: 16 * 1024 * 1024 });
+    if (r.status !== 0 || typeof r.stdout !== 'string') return null;
+    return r.stdout ? r.stdout.split('\n').length : 0;
+  } catch {
+    return null;
   }
 }
 
@@ -570,14 +582,23 @@ function postWrite(input: HookInput): void {
   const notes: string[] = [];
 
   // ① 超行数上限。依赖 repo-facts，没配就跳过
+  //
+  // 只在「这次把文件写超了」时提醒：文件在 HEAD 里就已经超限，说明是历史债，催拆会让 AI
+  // 在一个只要求内联函数的任务里顺手大重构（A/B 实测：E2 因此多出一倍轮次）。
+  // 同一文件每会话只提醒一次 —— 连续几次 Edit 每次都提醒，等于一直催。
   if (facts) {
     const n = countLines(path.join(repoDir, rel));
     if (n > facts.lineLimit) {
-      record('oversize_warn', repoDir, { file: rel, detail: String(n) });
-      notes.push(
-        `\`${rel}\` 现在有 ${n} 行，超过本仓上限 ${facts.lineLimit} 行。` +
-          '按本仓已有的拆法拆开，不要自己发明结构。',
-      );
+      const before = headLines(repoDir, rel);
+      if (before !== null && before > facts.lineLimit) {
+        record('oversize_preexisting', repoDir, { file: rel, detail: `${before}->${n}` });
+      } else if (claimStopNotice(`oversize:${repoId(repoDir)}:${rel}`)) {
+        record('oversize_warn', repoDir, { file: rel, detail: String(n) });
+        notes.push(
+          `\`${rel}\` 现在有 ${n} 行，超过本仓上限 ${facts.lineLimit} 行。` +
+            '按本仓已有的拆法拆开，不要自己发明结构。',
+        );
+      }
     }
   }
 

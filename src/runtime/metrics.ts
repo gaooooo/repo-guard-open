@@ -32,6 +32,8 @@ export type MetricEvent =
   | 'shell_bypass_warn'
   /** 写完超行数上限，提醒了 */
   | 'oversize_warn'
+  /** 文件在 HEAD 里就已超限：不催拆，只记一笔 */
+  | 'oversize_preexisting'
   /** AI 调了图谱查询 */
   | 'graph_query'
   /** 命中红线 */

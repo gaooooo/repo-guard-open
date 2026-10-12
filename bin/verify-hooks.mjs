@@ -258,6 +258,20 @@ add('W1', '写完超长文件 → 提醒', 'context',
 add('W2', '正常长度文件不提醒', 'allow',
   hook('post-write', { session_id: S, tool_input: { file_path: 'src/components/Existing/index.tsx' } }));
 
+// 行数上限：只在「这次写超了」时提醒，HEAD 里就超限的历史债不催拆；同一文件每会话只提醒一次
+w('src/components/Legacy/huge.tsx', 'x\n'.repeat(700));
+w('src/components/Legacy/near.tsx', 'x\n'.repeat(480));
+spawnSync('git', ['add', 'src/components/Legacy'], { cwd: REPO });
+spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'legacy'], { cwd: REPO });
+w('src/components/Legacy/huge.tsx', 'x\n'.repeat(720));
+add('W3', 'HEAD 里就超限的文件，改完仍超 → 不催拆', 'allow',
+  hook('post-write', { session_id: 'w3', tool_input: { file_path: 'src/components/Legacy/huge.tsx' } }));
+w('src/components/Legacy/near.tsx', 'x\n'.repeat(530));
+add('W4', '这次把文件写超了 → 提醒', 'context',
+  hook('post-write', { session_id: 'w4', tool_input: { file_path: 'src/components/Legacy/near.tsx' } }));
+add('W5', '同一文件同一会话第二次 → 不再提醒', 'allow',
+  hook('post-write', { session_id: 'w4', tool_input: { file_path: 'src/components/Legacy/near.tsx' } }));
+
 add('S1', '会话开始注入公共层清单', 'context',
   hook('session-start', { session_id: S }));
 const noAtlas = hook('session-start', { session_id: S }, { REPO_GUARD_ATLAS_BIN: '', PATH: '/usr/bin:/bin' });

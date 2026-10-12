@@ -66,7 +66,9 @@ export function guardSegment(facts: RepoFacts): string[] {
   const lines = [
     `本项目已接入 repo-guard。公共层目录：${layerText}。`,
     '改这些目录下**已有**的文件之前，必须先调 code-atlas 的 atlas_impact 工具（target=文件路径）确认影响面；受影响入口 ≥ 5 时只允许新增可选参数。',
-    `单文件超过 ${facts.lineLimit} 行需要拆分。影响面为 0 不等于可以删 —— 注意工具输出里的盲区清单。`,
+    // 只约束「新写 / 本次写超」的文件。原本就超限的是历史债：只说「需要拆分」，AI 会在只要求改一个函数的任务里
+    // 顺手把整个文件拆了（A/B 实测 E2：轮次翻倍、改动多出一个文件）
+    `新写或这次改到超过 ${facts.lineLimit} 行的文件要拆分；原本就超限的文件不要顺手拆，除非需求就是拆分。影响面为 0 不等于可以删 —— 注意工具输出里的盲区清单。`,
   ];
   if (facts.componentLibrary) {
     lines.push(`UI 组件库锁定为 ${facts.componentLibrary}，禁止引入第二套。`);
