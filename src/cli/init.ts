@@ -266,7 +266,7 @@ export function renderInit(
   if (!atlas.available) {
     lines.push(
       '图谱    未安装 code-atlas —— 跳过公共层推测与体量 / 循环依赖体检',
-      '        安装：npm i -g code-atlas（之后重跑 repo-guard init）',
+      '        安装：npm i -g @tencent/code-atlas（之后重跑 repo-guard init）',
     );
   } else if (atlas.error) {
     lines.push(`图谱    code-atlas ${atlas.version ?? ''} 拿图谱失败，跳过图谱相关推断：${atlas.error}`);

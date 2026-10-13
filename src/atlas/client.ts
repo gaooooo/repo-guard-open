@@ -65,7 +65,7 @@ export function atlasJson<T = Record<string, unknown>>(
   opts: { cwd: string; timeoutMs?: number },
 ): AtlasResult<T> {
   const r = atlasRun(args, { cwd: opts.cwd, timeoutMs: opts.timeoutMs ?? ATLAS_HOOK_TIMEOUT_MS });
-  if (isMissing(r)) return { ok: false, reason: 'missing', message: '找不到 atlas（npm i -g code-atlas）' };
+  if (isMissing(r)) return { ok: false, reason: 'missing', message: '找不到 atlas（npm i -g @tencent/code-atlas）' };
   if (r.error) return { ok: false, reason: 'error', message: r.error.message };
   let data: unknown;
   try {

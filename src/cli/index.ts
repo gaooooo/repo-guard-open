@@ -68,7 +68,7 @@ repo-guard —— 仓库体检与影响面工具（零服务端）
   repo-guard mcp                   作为 stdio MCP 给 AI 用
   repo-guard hook <name>           插件钩子（由宿主调用）
 
-图谱命令已移交 code-atlas（npm i -g code-atlas），用同名的 atlas 命令：
+图谱命令已移交 code-atlas（npm i -g @tencent/code-atlas），用同名的 atlas 命令：
   atlas impact <文件#符号>   atlas hot [要写什么]   atlas trace <路径>
   atlas similar <要做什么> [--resource User --verbs Create,Delete]
   atlas contracts --types [接口]   atlas conform --plan <plan.json>   atlas viz --open
@@ -191,7 +191,7 @@ async function main(): Promise<number> {
     case 'scan': {
       // 转调 atlas scan：文本 / --json 原样透传，退出码透传（有问题非零，能挂流水线）
       if (!atlasAvailable()) {
-        err('scan 由 code-atlas 提供，但没找到 atlas。安装：npm i -g code-atlas');
+        err('scan 由 code-atlas 提供，但没找到 atlas。安装：npm i -g @tencent/code-atlas');
         return 2;
       }
       const facts = readFacts(repoDir);
@@ -385,7 +385,7 @@ async function main(): Promise<number> {
     default:
       if (MOVED_TO_ATLAS.has(cmd)) {
         err(`\`repo-guard ${cmd}\` 已移交 code-atlas，请用：atlas ${argv.join(' ')}`);
-        err('没装的话：npm i -g code-atlas');
+        err('没装的话：npm i -g @tencent/code-atlas');
         return 2;
       }
       err(`未知命令：${cmd}`);

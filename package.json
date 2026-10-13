@@ -2,7 +2,7 @@
   "name": "repo-guard",
   "version": "0.2.0",
   "private": true,
-  "description": "仓库体检与影响面守卫 —— CodeBuddy 插件。图谱由 code-atlas 提供（atlas CLI + MCP，npm i -g code-atlas），规则读仓库文件。",
+  "description": "仓库体检与影响面守卫 —— CodeBuddy 插件。图谱由 code-atlas 提供（atlas CLI + MCP，npm i -g @tencent/code-atlas），规则读仓库文件。",
   "//type": "⚠️ 绝对不要加 \"type\": \"module\"。产物 bin/repo-guard 是无扩展名的 CJS 文件，Node 按最近的 package.json 判定模块类型；声明成 module 会让它被当 ESM 解析，第一行 require 就 ReferenceError，而 hook 层 fail-open 会把错误吞掉 —— 插件表面装着、实际全放行。build/build.mjs 的冒烟步骤守着这条。构建脚本自己用 .mjs 后缀拿到 ESM。",
   "engines": {
     "node": ">=18.0.0"

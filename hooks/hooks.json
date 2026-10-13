@@ -308,7 +308,7 @@
 
     "Setup": [
       {
-        "_": "待补充 · 插件安装/启用时跑一次。⚠️ 这个事件**不在官方文档的事件清单里**，但宿主实现里有，内部市场的 bugbot 用它装 CLI。repo-guard 自身已打包进 bin/；图谱依赖的 code-atlas 需用户自行 npm i -g code-atlas（SessionStart 会提示），所以留空。将来若要做『首次启用时自动跑一次 init（只报告不写）』，挂这里。",
+        "_": "待补充 · 插件安装/启用时跑一次。⚠️ 这个事件**不在官方文档的事件清单里**，但宿主实现里有，内部市场的 bugbot 用它装 CLI。repo-guard 自身已打包进 bin/；图谱依赖的 code-atlas 需用户自行 npm i -g @tencent/code-atlas（SessionStart 会提示），所以留空。将来若要做『首次启用时自动跑一次 init（只报告不写）』，挂这里。",
         "hooks": []
       }
     ]

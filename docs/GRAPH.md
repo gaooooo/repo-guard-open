@@ -4,7 +4,7 @@
 
 它是代码的投影，删了重跑结果一样，所以缓存不进 git。红线才是人写的意图。
 
-**图谱由 code-atlas 提供（atlas CLI + MCP，`npm i -g code-atlas`），repo-guard 不再自带引擎。** 本仓只留调用客户端 `src/atlas/` 与查询留痕钩子 `post-atlas`。红线引擎不在这里（`src/engine/`）。作者面说明在 `layers/graph/`，只写「何时必须查」，不存规范原文。
+**图谱由 code-atlas 提供（atlas CLI + MCP，`npm i -g @tencent/code-atlas`），repo-guard 不再自带引擎。** 本仓只留调用客户端 `src/atlas/` 与查询留痕钩子 `post-atlas`。红线引擎不在这里（`src/engine/`）。作者面说明在 `layers/graph/`，只写「何时必须查」，不存规范原文。
 
 WorkBuddy 接入、与开源 CodeGraph 的分工、多仓契约索引：见 [`GRAPH-MULTI-REPO-SCHEME.md`](GRAPH-MULTI-REPO-SCHEME.md)。
 

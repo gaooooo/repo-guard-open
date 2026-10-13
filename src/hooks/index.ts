@@ -268,7 +268,7 @@ function sessionStart(input: HookInput): void {
   // 被拦之后无路可走 —— 必须明说，不能沉默（同 F2 的理由）。不阻塞
   const atlasNote = atlasAvailable()
     ? ''
-    : '图谱相关守卫未生效：没找到 code-atlas（atlas 命令）。请安装 code-atlas（npm i -g code-atlas）后重开会话；在此之前查不了影响面 / 同类实现。';
+    : '图谱相关守卫未生效：没找到 code-atlas（atlas 命令）。请安装 code-atlas（npm i -g @tencent/code-atlas）后重开会话；在此之前查不了影响面 / 同类实现。';
 
   const repos = reposOf(input);
   if (repos.length === 1) {

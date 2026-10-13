@@ -2,7 +2,7 @@
 description: 仓库体检：超长文件、循环依赖、工程配置缺口
 ---
 
-在仓库根跑 `atlas scan`（code-atlas 提供，也可用 `repo-guard scan` 转调；没装就提示我 `npm i -g code-atlas`），然后用中文汇报：
+在仓库根跑 `atlas scan`（code-atlas 提供，也可用 `repo-guard scan` 转调；没装就提示我 `npm i -g @tencent/code-atlas`），然后用中文汇报：
 
 1. 超过行数上限的文件有几个、最大的是哪个
 2. 循环依赖有几处

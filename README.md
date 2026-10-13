@@ -1,6 +1,6 @@
 # repo-guard
 
-> 仓库体检与影响面守卫。**零服务端**——不连任何服务、不需要令牌，规则读仓库文件。**图谱由 [code-atlas](../code-atlas) 提供**（`atlas` CLI + MCP，`npm i -g code-atlas`）。
+> 仓库体检与影响面守卫。**零服务端**——不连任何服务、不需要令牌，规则读仓库文件。**图谱由 [code-atlas](../code-atlas) 提供**（`atlas` CLI + MCP，`npm i -g @tencent/code-atlas`）。
 
 装完之后 AI 会做三件它以前不做的事：改公共层代码**之前**先确认影响面、写完超长文件会被提醒、想绕道用 `sed` 写公共层会被记一笔。
 
@@ -211,7 +211,7 @@ repo-guard 不再自带图谱引擎。影响面、同类实现、热点、接口
 守卫怎么知道 AI「查过了」：PostToolUse 钩子 `post-atlas` 在 AI 调完 `atlas_impact / atlas_reuse / atlas_trace` 后把查过的文件 / 资源记进会话状态；
 AI 在终端里跑 `atlas impact|similar|hot` 时由 `post-bash` 识别。Stop 时的写后比对调 `atlas conform`。
 
-- 安装：`npm i -g code-atlas`。`repo-guard init` 发现本仓不在 atlas 工作区时会先 `atlas add` 建索引。
+- 安装：`npm i -g @tencent/code-atlas`。`repo-guard init` 发现本仓不在 atlas 工作区时会先 `atlas add` 建索引。
 - 没装 atlas：会话开始会明说「图谱相关守卫未生效」；公共层守卫照常拦，但 AI 查不了影响面。
 - 测试或未全局安装时可设 `REPO_GUARD_ATLAS_BIN=<code-atlas>/bin/atlas`。
 
