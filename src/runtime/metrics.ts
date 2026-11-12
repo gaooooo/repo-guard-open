@@ -62,6 +62,28 @@ export type MetricEvent =
   /** 写后比对：新代码与参考骨架一致 / 有偏差（detail = 偏差种类） */
   | 'conform_ok'
   | 'conform_drift'
+  /** v2：契约声明 / 扩范围、顺手发现 */
+  | 'contract'
+  | 'guard_note'
+  /** v2：没有契约就写第 2 个文件，拒绝了一次 */
+  | 'contract_deny'
+  /** v2：范围越界（remind 写后提醒 / enforce 写前弹窗） */
+  | 'scope_remind'
+  | 'scope_ask'
+  /** v2：新建前没查 atlas（remind 提醒 / enforce 拒绝） */
+  | 'reuse_remind'
+  | 'reuse_deny'
+  /** v2：本次新增或变长的函数超阈值 */
+  | 'complexity_remind'
+  /** v2：红线（路径 / 命令）按 action 处理 */
+  | 'redline_remind'
+  | 'redline_deny'
+  /** v2：连续失败，提醒换思路 */
+  | 'loop_remind'
+  /** v2：发现经命令（非编辑工具）修改的文件 */
+  | 'shell_write'
+  /** v2：Stop 回执（detail = 待说明项） */
+  | 'receipt'
   /** 会话开始 / 结束 */
   | 'session_start'
   | 'session_end';

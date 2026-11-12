@@ -17,8 +17,8 @@
   ],
 
   "name": "repo-guard",
-  "version": "0.2.0",
-  "description": "仓库体检与影响面守卫：改公共层前先确认影响面，写完扫红线与体量。依赖 code-atlas 提供图谱（atlas CLI + MCP，请先 npm i -g @tencent/code-atlas）；未安装时图谱相关守卫不生效，其余照常。规则读仓库文件。",
+  "version": "0.3.0",
+  "description": "AI 编程过程控制：任务契约、写时控制（越界 / 复用 / 复杂度 / 红线）、改动回执与合并门。依赖 code-atlas 提供图谱（npm i -g @tencent/code-atlas）；未安装时图谱相关控制跳过，其余照常。规则读仓库内 .codebuddy/repo-guard.json。",
   "author": { "name": "repo-guard" },
   "license": "MIT",
   "keywords": ["code-graph", "impact-analysis", "guardrails", "lint", "quality-gate"],

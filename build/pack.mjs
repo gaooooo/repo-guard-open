@@ -67,7 +67,8 @@ const SKIP_SMOKE = argv.includes('--skip-smoke');
 const MANIFEST = [
   // ── 引擎与自检 ──
   { src: 'bin/repo-guard', required: true, why: '引擎本体，零依赖单文件' },
-  { src: 'bin/verify-hooks.mjs', required: true, why: '部门侧唯一的自动化闸门，见下方说明' },
+  { src: 'bin/verify-hooks.mjs', required: true, why: '钩子回归' },
+  { src: 'bin/verify-atlas.mjs', required: true, why: '外部图谱接入回归' },
 
   // ── 宿主要读的清单与配置 ──
   { src: '.codebuddy-plugin', required: true, why: '插件清单，宿主的入口' },
@@ -82,6 +83,7 @@ const MANIFEST = [
   { src: 'agents', required: true, why: '子代理' },
 
   // ── 部门要填的就是这里 ──
+  { src: 'config', required: true, why: 'v2 全局层配置 config/repo-guard.json（过程控制的部门默认值）' },
   { src: 'layers', required: true, why: '七层作者面 + 全局层 JSON（规范/红线/门禁模板）' },
 
   // ── 文档 ──

@@ -23,7 +23,10 @@ import { findRepoRoot } from '../runtime/paths.js';
 import { readFacts, componentDocsHint } from '../runtime/repo-facts.js';
 import { hasRedlines, loadRedlines } from '../runtime/redlines.js';
 import { judge, missingConfig } from '../runtime/guard.js';
-import { adoptSessionFor, recordLibSearch } from '../runtime/session-state.js';
+import { addNote, adoptSessionFor, getContract, recordLibSearch, saveContract } from '../runtime/session-state.js';
+import { loadControl } from '../control/config.js';
+import { contractText } from '../control/scope.js';
+import { fieldAuditSnapshot } from '../control/cli.js';
 import { record } from '../runtime/metrics.js';
 import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
 
@@ -61,6 +64,36 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'guard_task',
+    description:
+      '声明或更新本次任务契约：目标、不做什么、范围（文件 / 目录 glob）、验收命令。改多个文件之前先调它 —— 它是这次改动的边界，范围外的写入会被提醒并列进回执。' +
+      '根据用户需求起草，范围尽量收窄到真正要改的目录。之后要扩大范围就再调一次，新增的范围必须在 reason 里写理由（会展示给开发者）。不要为了顺手优化扩范围：范围外发现的问题用 guard_note 记下。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: '要达成什么，一两句话' },
+        nonGoals: { type: 'array', items: { type: 'string' }, description: '明确不做的事，如「不改分页逻辑」「不重构 service 层」' },
+        scope: { type: 'array', items: { type: 'string' }, description: '允许改动的文件或目录 glob，相对仓库根，如 internal/logic/agent/**、router/agent.go' },
+        verify: { type: 'array', items: { type: 'string' }, description: '验收命令，如 go test ./internal/logic/agent/...；不写则用本仓配置的验收命令' },
+        reason: { type: 'string', description: '更新契约且新增了范围时必填：为什么要扩大范围' },
+      },
+      required: ['goal', 'scope'],
+    },
+  },
+  {
+    name: 'guard_note',
+    description:
+      '记下范围外发现的问题（命名不规范、重复查询、可优化处、疑似 bug），不要顺手改。记录会在本轮结束的回执里列给开发者决定。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string', description: '发现了什么、为什么值得处理' },
+        file: { type: 'string', description: '相关文件，可写「文件:行号」' },
+      },
+      required: ['note'],
+    },
+  },
+  {
     name: 'audit',
     description:
       '体检本仓红线还准不准：protects 的符号是不是已经改名或删了（规则在守空气）、paths 有没有漏掉符号实际出现的位置（有后门）、evidence 的行号还指不指得对。人写的指针必然腐烂，这是机器验完整性。',
@@ -84,6 +117,34 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
   };
 
   switch (name) {
+    case 'guard_task': {
+      const list = (v: unknown): string[] =>
+        Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim())
+          : typeof v === 'string' && v.trim() ? [v.trim()] : [];
+      const goal = str(args.goal);
+      const scope = list(args.scope);
+      if (!goal || !scope.length) return '缺少 goal 或 scope。scope 写允许改动的文件或目录 glob，如 src/pages/agent/**。';
+      const verify = list(args.verify);
+      const r = saveContract({ goal, nonGoals: list(args.nonGoals), scope, verify, cwd: process.cwd() }, str(args.reason));
+      if (!r.ok) return r.message;
+      track('contract', { detail: r.added.length ? 'expand:' + r.added.join(',') : 'declare' });
+      const c = getContract()!;
+      const fallback = !verify.length ? loadControl(repoDir).cfg.verify.commands : [];
+      return [
+        r.added.length && c ? '契约已更新，扩大范围：' + r.added.join('、') : '契约已记录。',
+        contractText(c, fallback),
+        '范围外的写入会被提醒并列进回执；范围外发现的问题用 guard_note 记下，不要顺手改。完成前跑验收命令。',
+      ].join('\n');
+    }
+
+    case 'guard_note': {
+      const note = str(args.note);
+      if (!note) return '缺少 note。';
+      const n = addNote(note, str(args.file) || undefined);
+      track('guard_note');
+      return '已记下（本会话第 ' + n + ' 条），会在回执里列给开发者。继续当前任务，不要去改它。';
+    }
+
     case 'check': {
       const files = Array.isArray(args.files)
         ? args.files.filter((x): x is string => typeof x === 'string')
@@ -149,11 +210,12 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     }
 
     case 'audit': {
-      if (!hasRedlines(repoDir)) {
-        return '本仓没有红线文件（.codebuddy/redlines.json），没有可体检的规则。';
+      const v2snap = fieldAuditSnapshot(repoDir);
+      if (v2snap ? !v2snap.policy.red_lines.length : !hasRedlines(repoDir)) {
+        return '本仓没有字段红线（.codebuddy/repo-guard.json 的 redlines.fields），没有可体检的规则。';
       }
       track('graph_query', { detail: 'audit' });
-      return formatAuditReport(auditPolicy(loadRedlines(repoDir), repoDir));
+      return formatAuditReport(auditPolicy(v2snap ?? loadRedlines(repoDir), repoDir));
     }
 
     default:

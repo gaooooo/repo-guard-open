@@ -6,6 +6,7 @@
 
 | 命令 | 用途 |
 |---|---|
+| `/repo-guard:init` | 接入：识别本仓、逐项说明并确认要启用的过程控制，然后写配置（AI 走 `init --plan --json` / `--apply`） |
 | `/repo-guard:impact` | 改动前算影响面 |
 | `/repo-guard:repo-check` | 体量与结构体检 |
 | `/repo-guard:audit` | 红线体检：守空气 / 后门 / 证据失准 |

@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { configPath, readJson, writeJson } from './paths.js';
+import { controlFile } from '../control/config.js';
 
 /**
  * 行数上限的最终兜底。超过只提醒不拦 —— 存量超长文件遍地都是，硬拦等于没法干活。
@@ -114,8 +115,12 @@ export function factsFile(repoDir: string): string {
  * 与它本来就要做的那次读同量级。缓存反而要处理失效，不值得。
  */
 export function readFacts(repoDir: string): RepoFacts | null {
-  const raw = readJson<Partial<RepoFacts>>(factsFile(repoDir));
-  if (!raw) return null; // ← 守卫总开关。部门默认值不得改变这一行的语义
+  // v2：项目层 .codebuddy/repo-guard.json 的 publicLayer 优先；旧 repo-facts.json 仍可读（未迁移的仓照旧）
+  const ctl = readJson<{ publicLayer?: unknown }>(controlFile(repoDir));
+  const legacy = readJson<Partial<RepoFacts>>(factsFile(repoDir));
+  if (!legacy && !ctl) return null; // ← 守卫总开关。部门默认值不得改变这一行的语义
+  const raw: Partial<RepoFacts> = { ...(legacy ?? {}) };
+  if (ctl && Array.isArray(ctl.publicLayer)) raw.publicLayer = ctl.publicLayer as string[];
 
   const d = readFactsDefaults();
   return {

@@ -150,7 +150,24 @@ function hook(name, input, env = {}) {
  * 工具名就是插件注册的 mcp__code-atlas__<tool>（真机已确认）。
  */
 function atlasCall(sid, tool, toolInput, extra = {}) {
-  return hook('post-atlas', { session_id: sid, tool_name: `mcp__code-atlas__${tool}`, tool_input: toolInput, tool_response: { content: [] }, ...extra });
+  const cwd = extra.cwd ?? REPO;
+  let response;
+  if (HAS_ATLAS) {
+    const rpc = spawnSync(process.execPath, [ATLAS_BIN, 'mcp'], {
+      cwd, encoding: 'utf-8', input: JSON.stringify({ id: 1, method: 'tools/call', params: { name: tool, arguments: toolInput } }) + '\n',
+      env: { ...process.env, ...ATLAS_ENV },
+    });
+    response = JSON.parse(rpc.stdout.trim()).result;
+  } else {
+    // 无 Atlas 时只模拟确定的成功回执；依赖真正解析的用例仍明确 SKIP。
+    const file = toolInput.target?.split('#')[0];
+    const kind = tool === 'atlas_impact' ? 'impact' : toolInput.kind === 'similar' ? 'similar' : 'hot';
+    const prefix = file?.split('/')[0];
+    const owner = prefix && ['fe', 'be'].includes(prefix) ? path.join(cwd, prefix) : cwd;
+    const relative = owner === cwd ? file : file.slice(prefix.length + 1);
+    response = { structuredContent: { receipt: { schemaVersion: 1, kind, status: file?.includes(':') ? 'not_found' : 'ok', workspace: 'default', repos: [{ id: 'fixture', path: owner }], ...(file ? { targets: [{ repo: 'fixture', file: relative }] } : {}) } } };
+  }
+  return hook('post-atlas', { session_id: sid, tool_name: 'mcp__code-atlas__' + tool, tool_input: toolInput, tool_response: response, ...extra });
 }
 const recordImpact = (sid, file) => atlasCall(sid, 'atlas_impact', { target: file });
 
@@ -185,6 +202,7 @@ let phase = 'A';
 const add = (id, desc, want, got) => cases.push({ phase, id, desc, want, got });
 
 const S = 'verify-session';
+const ATLAS_CMD = JSON.stringify(process.execPath) + ' ' + JSON.stringify(ATLAS_BIN);
 
 // ══════════════════ 阶段 A · 基线 21 条（无 guard 配置）══════════════════
 //
@@ -236,22 +254,25 @@ add('G4', 'atlas_impact 只给符号 → 经 atlas --cache-only 解析出文件�
   }));
 const GP = 'atlas-prefix';
 atlasCall(GP, 'atlas_impact', { target: 'some-repo:src/components/Existing/big.tsx#X' });
-add('G5', 'atlas_impact 带「仓id:」前缀与 #符号 → 去掉前缀按文件放行', 'allow',
+add('G5', 'atlas_impact 未知仓id不产生成功回执 → 仍拦', 'deny',
   hook('pre-write', { session_id: GP, tool_input: { file_path: 'src/components/Existing/big.tsx' } }));
 add('G6', '非 code-atlas 的工具名不记', 'deny', (() => {
   hook('post-atlas', { session_id: 'atlas-other', tool_name: 'mcp__other__atlas_impact', tool_input: { target: 'src/utils/helper.ts' } });
   return hook('pre-write', { session_id: 'atlas-other', tool_input: { file_path: 'src/utils/helper.ts' } });
 })());
-hook('post-bash', { session_id: 'atlas-bash', tool_name: 'Bash', tool_input: { command: 'cd . && atlas impact src/utils/chain.ts#useChain --json' }, tool_response: { exitCode: 0 } });
+hook('post-bash', { session_id: 'atlas-bash', tool_name: 'Bash', tool_input: { command: 'cd . && ' + ATLAS_CMD + ' impact src/utils/chain.ts#useChain --json' }, tool_response: { exitCode: 0 } });
 add('G7', '终端里跑过 atlas impact（post-bash 识别）→ 放行', 'allow',
-  hook('pre-write', { session_id: 'atlas-bash', tool_input: { file_path: 'src/utils/chain.ts', old_string: 'export const useChain = () => CHAIN_STATUS;', new_string: 'export const useChain = () => CHAIN_STATUS; // x' } }));
+  needAtlas(() => hook('pre-write', { session_id: 'atlas-bash', tool_input: { file_path: 'src/utils/chain.ts', old_string: 'export const useChain = () => CHAIN_STATUS;', new_string: 'export const useChain = () => CHAIN_STATUS; // x' } })));
 
-add('B1', 'shell 写公共层 → 提醒但不拦', 'context',
+// shell 写公共层：写前不输出（allow 会绕过用户对命令的权限确认），执行后提醒
+add('B0', 'shell 写公共层 → 写前不输出（不用 allow 绕过权限确认）', 'allow',
   hook('pre-bash', { session_id: S, tool_input: { command: 'sed -i s/a/b/ src/components/x.tsx' } }));
+add('B1', 'shell 写公共层 → 执行后提醒', 'context',
+  hook('post-bash', { session_id: S, tool_name: 'Bash', tool_input: { command: 'sed -i s/a/b/ src/components/x.tsx' }, tool_response: { exitCode: 0 } }));
 add('B2', '只读命令不提醒', 'allow',
-  hook('pre-bash', { session_id: S, tool_input: { command: 'grep -r foo src/components/' } }));
+  hook('post-bash', { session_id: S, tool_name: 'Bash', tool_input: { command: 'grep -r foo src/components/' }, tool_response: { exitCode: 0 } }));
 add('B3', 'shell 动非公共层不提醒', 'allow',
-  hook('pre-bash', { session_id: S, tool_input: { command: 'sed -i s/a/b/ src/views/page/index.tsx' } }));
+  hook('post-bash', { session_id: S, tool_name: 'Bash', tool_input: { command: 'sed -i s/a/b/ src/views/page/index.tsx' }, tool_response: { exitCode: 0 } }));
 
 add('W1', '写完超长文件 → 提醒', 'context',
   hook('post-write', { session_id: S, tool_input: { file_path: 'src/components/Existing/big.tsx' } }));
@@ -283,7 +304,7 @@ add('S3', '装了 atlas → 不出现安装提示', 'no',
     return { verdict: r.reason.includes('请安装 code-atlas') ? 'yes' : 'no', reason: r.reason };
   }));
 const tools = mcpRequest({ method: 'tools/list' })?.result?.tools?.map((t) => t.name).join(',') ?? '';
-add('Q1', 'repo-guard MCP 只暴露 check / lib_search / audit', 'check,lib_search,audit', { verdict: tools, reason: tools });
+add('Q1', 'repo-guard MCP 暴露 check / lib_search / guard_task / guard_note / audit（图谱工具在 code-atlas）', 'check,lib_search,guard_task,guard_note,audit', { verdict: tools, reason: tools });
 
 // 未配置 → 必须 fail-open
 fs.renameSync(path.join(REPO, '.codebuddy/repo-facts.json'), path.join(REPO, 'facts.bak'));
@@ -511,9 +532,9 @@ add('L1-11', '查过 similar 后新建页面 → 放行', 'allow',
 atlasCall('l1k', 'atlas_reuse', { intent: '带分页的列表页' });
 add('L1-11b', 'atlas_reuse 不带 kind/resource 是查热点，不算查过同类 → 新建页面仍拦', 'deny',
   hook('pre-write', { session_id: 'l1k', tool_input: { file_path: 'src/views/newpage/index.tsx' } }));
-hook('post-bash', { session_id: 'l1m', tool_name: 'Bash', tool_input: { command: 'atlas similar 带分页的列表页 --json' }, tool_response: { exitCode: 0 } });
+hook('post-bash', { session_id: 'l1m', tool_name: 'Bash', tool_input: { command: ATLAS_CMD + ' similar 带分页的列表页 --json' }, tool_response: { exitCode: 0 } });
 add('L1-11c', '终端里跑过 atlas similar（post-bash 识别）→ 新建页面放行', 'allow',
-  hook('pre-write', { session_id: 'l1m', tool_input: { file_path: 'src/views/newpage/index.tsx' } }));
+  needAtlas(() => hook('pre-write', { session_id: 'l1m', tool_input: { file_path: 'src/views/newpage/index.tsx' } })));
 add('L1-12', '新建组件未查组件库 → 拦', 'deny',
   hook('pre-write', { session_id: 'l1i', tool_input: { file_path: 'src/components/New/index.tsx' } }));
 add('L1-13', '**已存在**的页面不受新建规则约束', 'allow',
@@ -734,10 +755,10 @@ add('E-M9', 'atlas_impact 只给符号 → atlas 解析到 be → 放行', 'allo
   }));
 wsAtlas('ws-f', { target: 'src/shared/util.ts' });
 add('E-M10', '两个子仓都有的同名文件、没指明仓 → 不放行', 'deny', wsWrite('ws-f', 'fe/src/shared/util.ts'));
-wsHook('post-bash', 'ws-g', { tool_name: 'Bash', tool_input: { command: 'cd be && atlas impact service/other.go' }, tool_response: { exitCode: 0 } });
-add('E-M11', '终端里 cd 子仓再 atlas impact → 放行', 'allow', wsWrite('ws-g', 'be/service/other.go'));
+wsHook('post-bash', 'ws-g', { tool_name: 'Bash', tool_input: { command: 'cd be && ' + ATLAS_CMD + ' impact service/other.go' }, tool_response: { exitCode: 0 } });
+add('E-M11', '终端里 cd 子仓再 atlas impact → 放行', 'allow', needAtlas(() => wsWrite('ws-g', 'be/service/other.go')));
 add('E-M12', '父目录下用 shell 写子仓公共层 → 提醒', 'context',
-  wsHook('pre-bash', 'ws-h', { tool_input: { command: 'sed -i s/a/b/ fe/src/components/Btn.tsx' } }));
+  wsHook('post-bash', 'ws-h', { tool_name: 'Bash', tool_input: { command: 'sed -i s/a/b/ fe/src/components/Btn.tsx' }, tool_response: { exitCode: 0 } }));
 add('E-M13', '会话在 fe 仓里、改兄弟仓 be 的公共层 → 按 be 的配置拦', 'deny',
   hook('pre-write', { cwd: path.join(WS, 'fe'), session_id: 'ws-i', tool_input: { file_path: '../be/service/validator.go' } }));
 

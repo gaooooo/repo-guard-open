@@ -1,6 +1,35 @@
 # CHANGELOG
 
-## 未发布
+## 0.3.0 —— v2 开发过程控制
+
+### 安装方式
+
+本仓库同时是插件市场：`/plugin marketplace add git@git.woa.com:shingao/repo-guard.git`，然后 `/plugin install repo-guard@repo-guard`；终端里执行一次 `repo-guard link`（见 README）。
+
+### v2 开发过程控制（Beta，设计见 docs/DESIGN-v2.md）
+
+- 单一配置：插件 `config/repo-guard.json`（全局层）+ 仓库 `.codebuddy/repo-guard.json`（项目层），项目层存在才启用。init 把全部可调字段（预算、档位、默认命令红线等）连同说明写进项目层，项目层整体覆盖全局层；`status` 列出与部门默认不同的项。
+- 任务契约：MCP 新增 `guard_task` / `guard_note`；写第 2 个文件还没有契约时拒绝一次；每轮注入契约摘要，压缩后与子代理启动时（新挂 SubagentStart）重注入基线与契约。
+- 写时控制：红线（路径 / 字段 / 内容 / 命令，按 action 执行、缺省 block、不受总档位约束；内置 5 条硬编码凭据规则；旧 `redlines.json` 的字段红线由 init 迁入，`audit` 改为体检 `repo-guard.json` 的字段红线）；remind 档写后提醒范围越界、新建前未查 atlas、本次新增或变长函数的长度 / 嵌套 / 参数、连续失败；enforce 档写前弹窗或拒绝。
+- 改动回执（Stop）：对比写前快照计算范围、体量、复杂度、atlas 查重、噪声、验证证据、顺手发现；`systemMessage` 给人看，有待说明项时续跑让模型逐条说明。
+- 新命令：`init`（交互接入与告知；`--plan --json` / `--apply` / `--yes` / `--merge-gate`）、`status`、`receipt`、`check --staged | --base`（合并门）；斜杠命令 `/repo-guard:init`。
+- shell 写公共层的提醒从写前挪到执行后：写前的 `allow` + 说明会绕过用户对命令的权限确认。
+- `post-bash` 中 atlas 绑定失效不再吞掉其余处理；新机器上没有 atlas 工作区时 init 使用 default。
+- 复杂度提醒只算新函数超阈值、或已有函数被这次改动推过阈值；改动前已超阈值的函数不再提醒。修复把 `moment(x).format(y)` 这类调用误认成方法定义。
+- 新增 `repo-guard link`：在 `~/.local/bin` 写一个启动器，每次运行时在已安装的插件中选版本最高的那份（项目级安装只在当前目录属于该项目时才算），插件升级后不用重新 link；目标已存在且不是启动器时不覆盖。
+- 实测修复（前后端各两个真实需求的对照实验中发现）：
+  - 模型用 `python3 - <<EOF`、`sed -i` 等命令直接改文件会绕开编辑工具：会话开始记 git 基线，命令执行后与结束时对比工作区，把经命令改动的文件纳入范围、复杂度、红线检查和回执。
+  - 插件内注册的 MCP 工具名是 `mcp__plugin_repo_guard_code_atlas__*` / `mcp__plugin_repo_guard_repo_guard__*`（宿主把连字符转成下划线），post-atlas 的 matcher 与提示文案改为同时覆盖两套名字。
+  - 延迟加载的 MCP 工具经 `DeferExecuteTool` 代理调用：新增该 matcher，从入参取真实工具名；拿不到结构化回执时只读缓存再查一次。
+- 删除旧 `init` 的体检报告渲染（`renderInit`）；`init --write` 等同 `init --yes`，写 `repo-guard.json` 而不是 `repo-facts.json`。
+
+### 统一外部 code-atlas 图谱接入
+
+- 新增 `repo-guard atlas bind/status/<原生命令>`，CLI、MCP、Hook 使用同一 Node 与完整工具包，显式绑定失效不回退 PATH。
+- `init` 默认只读预览；`--write` 才登记、建立或复用图谱。支持 `--ws` 与重复 `--with`，多工作区不静默选错。
+- 图谱查询留痕消费 Atlas 实际回执，不按工具入参猜目标；失败、歧义和未匹配不记成功，trace 不代替 impact。
+- code-atlas 配套源码补充原生查询回执、工作区元数据接口和文件级目标支持；本插件不复制图谱实现。
+- 增加隔离图谱接入专项回归。红线/门禁配置和策略暂不重设计。
 
 ### 删除自带图谱引擎，图谱改由 code-atlas 提供
 

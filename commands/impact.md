@@ -3,7 +3,7 @@ description: 查某个文件的影响面（改它会波及哪些页面或接口�
 argument-hint: <仓库根相对路径>[#符号]
 ---
 
-调用 code-atlas 的 `atlas_impact` 工具（target=`$1`）查影响面；没有这个工具时在终端跑 `atlas impact $1`（没装就提示我 `npm i -g @tencent/code-atlas`）。然后用中文汇报：
+调用 code-atlas 的 `atlas_impact` 工具（target=`$1`）查影响面；没有这个工具时在终端调用统一绑定跑 `repo-guard atlas impact $1`（没装就提示我 `npm i -g @tencent/code-atlas`）。然后用中文汇报：
 
 1. 受影响的入口总数（接口 / 页面），以及跨仓的调用方
 2. 受影响清单 —— 这些是改完必须回归的

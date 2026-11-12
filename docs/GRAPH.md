@@ -1,98 +1,81 @@
-# 图谱说明
+# code-atlas 图谱接入
 
-图谱回答的是静态分析能算、模型算不出来的事：**改这个会波及谁、仓里同类怎么写、这个入口实际打到哪。**
+repo-guard 是开发过程框架，code-atlas 是唯一图谱工具包。规则与流程由前者管理；解析、索引、跨仓关系、影响面、复用、契约、自查、可视化由后者提供。红线/门禁策略另行设计，本轮不调整。
 
-它是代码的投影，删了重跑结果一样，所以缓存不进 git。红线才是人写的意图。
+## 架构与配置主体
 
-**图谱由 code-atlas 提供（atlas CLI + MCP，`npm i -g @tencent/code-atlas`），repo-guard 不再自带引擎。** 本仓只留调用客户端 `src/atlas/` 与查询留痕钩子 `post-atlas`。红线引擎不在这里（`src/engine/`）。作者面说明在 `layers/graph/`，只写「何时必须查」，不存规范原文。
+| 部分 | 职责 | 谁配置 |
+|---|---|---|
+| 插件 .mcp.json | 经统一启动器注册原生 Atlas MCP | P：插件维护者 |
+| 本机 ~/.repo-guard/atlas.json | Node / bin 绑定和项目工作区选择，不进 git | U：开发者，通过 atlas bind/init 命令 |
+| 项目 .code-atlas.json | 可选请求封装、路径改写、架构展示 | J：项目开发者，遵循 Atlas 手册 |
+| 项目 .codebuddy/repo-facts.json | 既有公共层配置，不代表图谱扫描范围 | J：项目开发者 |
+| code-atlas 索引与缓存 | 工具包自动维护 | X：不由开发者编辑 |
 
-WorkBuddy 接入、与开源 CodeGraph 的分工、多仓契约索引：见 [`GRAPH-MULTI-REPO-SCHEME.md`](GRAPH-MULTI-REPO-SCHEME.md)。
+不新增第三层规则配置，不把本机路径写入团队配置。
 
----
+~~~text
+AI 原生 atlas_* MCP ─┐
+统一 CLI ────────────┼→ 同一 Node + code-atlas/bin/atlas → Atlas 图谱能力
+Hook 的只读调用 ─────┘
+                        ↓ 有效机器回执
+                 repo-guard 会话状态与留痕
+~~~
 
-## 一句话
+## 开发者接入
 
-动手前用 code-atlas 的 MCP（`atlas_impact` / `atlas_reuse` / `atlas_trace` …）或 CLI（`atlas …`）**拉**图。过程门禁可以要求「本轮查过」——由 PostToolUse 钩子 `post-atlas` 记录；hook 里 **禁止建图**（只用 `atlas … --cache-only`），缓存 miss 就放行。
+~~~bash
+# 一次绑定本地工具包；路径换成自己的
+repo-guard atlas bind /path/to/code-atlas --node /path/to/node
+repo-guard atlas status
 
----
+# npm 全局安装过时，不带路径会自动发现并保存当前安装
+repo-guard atlas bind
 
-## 和别的层怎么分
+# 在业务仓执行，相关仓由 --with 显式提供，可重复
+repo-guard init --write --ws myproject --with ../backend
+~~~
 
-| 层         | 问的是         | 图谱做不做                          |
-| --------- | ----------- | ------------------------------ |
-| 工程事实      | 公共层目录、组件库包名 | 只提供推测，人确认后写进 `repo-facts.json` |
-| 红线        | 哪个符号不许少     | 不做。`audit` 是红线体检，不是图谱          |
-| 过程门禁      | 本轮查过没       | 门禁只看会话里有没有查过；真正算图在 MCP/CLI     |
-| 技能库       | 怎么查、怎么读结果   | skill 教用法；图仍要现算                |
-| 人审 / 合并门禁 | 问人、进主干      | 不做                             |
+已登记的仓不会被重复添加，有效缓存由 Atlas 复用。索引或代码变化由 Atlas 自己更新。默认 init 只读缓存，不 add、不 sync；--write 才准备图谱和写既有事实配置。没有强制生成红线、门禁或规范配置。
 
----
+多个工作区需显式 --ws；单一工作区可自动复用。选择写入本机绑定，不改 Atlas 的全局默认工作区。兄弟仓只登记图谱，不写它的治理配置。
 
-## 能查什么
+绑定失效不回退其他版本，不自动安装/升级。完整工具包包含 assets 和 CodeGraph 平台依赖，不能只复制 bin/atlas。
 
-走 MCP（如 `mcp__repo-guard__impact`）或 `repo-guard <命令>`。建图只发生在这两处，没有写前十几秒的超时。
+## 日常调用
 
-| 工具           | 什么时候用         | 返回什么                         |
-| ------------ | ------------- | ---------------------------- |
-| `impact`     | 改**已有**文件前    | 直接调用者、依赖模块、受影响的页面/接口（带分数）、盲区 |
-| `similar`    | 写新页面前         | 仓里同类页骨架。intent 如「带分页和搜索的列表页」 |
-| `hot`        | 写新的公共组件前      | 被大量入口复用的符号，别重复造轮子            |
-| `lib_search` | 写新组件前         | 本仓 UI 组件库有没有现成的。内部库不在训练数据里   |
-| `trace`      | 问这个页面/接口实际打到哪 | 入口 → 处理函数 → 下游；前端仓还可反推出入参字段  |
-| `contracts`  | 从调用点生成类型草稿    | 必须人 review 才能落库，不能当成仓里已有类型   |
-| `scan`       | 体量体检，可挂 CI    | 超行数文件、循环依赖。有问题非零退出           |
+| 任务 | AI MCP | 统一 CLI |
+|---|---|---|
+| 修改/删除前 | atlas_impact，target=文件#符号/类型.字段 | repo-guard atlas impact '文件#符号' |
+| 新接口/页面前 | atlas_reuse，kind=similar | repo-guard atlas similar 需求 --resource User --verbs Create |
+| 方法/组件复用 | atlas_reuse，kind=reuse | repo-guard atlas hot 需求 |
+| 请求链路 | atlas_trace | repo-guard atlas trace 接口名 |
+| 写完自查 | atlas_review | repo-guard atlas review --ws myproject |
+| 前后端字段 | atlas_contracts，check=true | repo-guard atlas contracts --check |
+| 体检、展示 | Atlas CLI | repo-guard atlas scan / viz --open |
 
-`check` / `audit` 挂在同一个 MCP 上，但分别是守卫自查和红线体检，不是图谱查询。
+原生命令参数透传。trace 以目标业务仓 cwd 为起点，不支持 --repo。未安装 repo-guard 命令时使用 node /插件目录/bin/repo-guard。
 
----
+图谱已有单独 atlas install 接入时，检查助手实际 MCP 的来源；本插件不自动删除用户/项目接入。重绑定后重开会话。具体 Atlas 参数、平台支持和安装要求以工具包 docs/INSTALL.md、docs/USAGE.md 为准。
 
-## 何时必须查（过程门禁在 enforce）
+## 回执与只读边界
 
-| 场景           | 要求                        | 默认                          |
-| ------------ | ------------------------- | --------------------------- |
-| 改公共层**已有**文件 | 本轮对该文件查过 `impact`，否则 deny | **开**（插件核心，不受 admission 控制） |
-| 新建页/接口       | 本轮查过 `similar`            | 关；init 填 pathPatterns       |
-| 新建公共模块/UI 组件 | 本轮查过 `hot` / `lib_search` | 关；init 填 pathPatterns       |
+Atlas 影响面、链路、热点/复用、同类输出 receipt。MCP 放在 structuredContent.receipt；CLI --json 放在 receipt。形状包含 schemaVersion、kind、status、workspace、实际 repos、targets 和可选 plan。
 
-新建三条按**会话 + 仓库**记「查过」，不按文件记：答案对整批新建都适用。不能拿 A 仓的查询放行 B 仓。已存在的文件不走这三条。
+- status=ok 才记录成功；not_found/ambiguous、异常或缺回执不记录。
+- 目标成功解析而入口数为 0，说明查询完成，不说明可以删除。
+- trace 只留痕，不满足 impact 的手续。
+- repo-guard 不解析节点/边，不再通过工具入参推断符号归属，不保存图谱缓存。
+- MCP 回执与统一 CLI 直接记录，不二次查询。简单成功的原生 CLI 可只读缓存核验，复杂 shell 不作凭据。
+- Hook 中的登记查询只读 metadata；--cache-only 不更新索引。原有 Stop conform 接线保持，仍有有限超时与续跑预算，门禁策略另行设计。
+- 旧版工具包无回执时不会假装查询成功；本轮需要使用配套源码构建，不能仅看同一版本号就认定契约相同。
 
----
+## 验证
 
-## 怎么读结果
+~~~bash
+REPO_GUARD_ATLAS_BIN=/path/to/code-atlas/bin/atlas npm run check
+~~~
 
-- **影响面为 0 ≠ 可以删。** 只说明图谱能看见的范围内没有调用者。
-- 每次查询带**盲区**：动态 import、运行时拼路径、样式引用、SQL、离线任务、跨服务。这些完全在图外。
-- 受影响入口 ≥ 5：只允许新增可选参数，不要改已有签名。
-- 空图必须失败显式化，不得当成「没人用」。
-- 「未查到」不得写成「不存在」。
+专项回归覆盖统一绑定、原生 MCP、只读预览、初始化复用、多工作区、字段回执、查询失败与错误退出码。全部使用临时 HOME、ATLAS_HOME 和业务仓。没有工具包的专项回归明确 SKIP，不代表通过图谱验收。
 
----
-
-## 缓存与 hook
-
-缓存由 code-atlas 管（索引在被守卫仓的 `.codegraph/` 与 `ATLAS_HOME`），失效与增量重建是它的事。
-
-钩子只调 `atlas … --json --cache-only`，超时预算不够建图。缓存缺失（atlas 退出码 3）→ fail-open（当没这道图谱强制，公共层 impact 仍按「没查过」拦）。唯一例外是 Stop 的写后比对：`atlas conform` 允许增量建图，限时 12 秒，失败放行。
-
-不要在 hook 里建图，也不要把调用者列表推进 SessionStart。T4 只推公共层目录和盲区一句。
-
----
-
-## 怎么用
-
-1. `repo-guard init --write` 生成 `repo-facts.json`（含按 `atlas hot` 推测的 publicLayer；本仓不在 atlas 工作区时先 `atlas add`），**人必须过一眼**
-2. 改公共层前调 `atlas_impact`；写新页/新组件按任务调 `atlas_reuse`（kind=similar / 热点）/ `lib_search`
-3. `repo-guard guard init --write` 会按本仓目录补 pathPatterns。要硬拦时打开 `admission` 并把对应 `enabled` 设为 true
-4. 打分与边权在 code-atlas 里维护，不在本仓
-
----
-
-## 可视化
-
-已移交 code-atlas：`atlas viz --open`（斜杠命令 `/repo-guard:graph`）。下面是 repo-guard 自带沙盘时期的设计记录。
-
-### 原设计（已废弃）
-
-工作台是**一张（或两张互相有边的）关系图**：总览 / 影响面 / 调用链 / 热点是图上的状态，不是四个页面。点节点看依赖和弹窗证据；字段 / 同类 / 盲区是检索框。只读 `.codebuddy/.cache/`，不在视图里建图。
-
-能力设计见 [`GRAPH-VIZ.md`](GRAPH-VIZ.md)。
+图谱 review 是静态自查，不代替 test/build，也看不见工作区外和部分动态调用。

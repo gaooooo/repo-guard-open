@@ -1,0 +1,22 @@
+{
+  "name": "repo-guard",
+  "owner": {
+    "name": "shingao"
+  },
+  "description": "repo-guard 插件市场：本仓库既是插件源码，也是市场清单。/plugin marketplace add git@git.woa.com:shingao/repo-guard.git 后 /plugin install repo-guard@repo-guard",
+  "plugins": [
+    {
+      "name": "repo-guard",
+      "source": "./",
+      "description": "AI 编程过程控制：任务契约、写时控制（越界 / 复用 / 复杂度 / 红线）、改动回执与合并门。依赖 code-atlas（npm i -g @tencent/code-atlas）。",
+      "repository": "https://git.woa.com/shingao/repo-guard",
+      "keywords": [
+        "guardrails",
+        "process-control",
+        "code-review",
+        "code-atlas"
+      ],
+      "category": "development"
+    }
+  ]
+}

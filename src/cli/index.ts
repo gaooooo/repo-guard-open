@@ -28,8 +28,8 @@ import { judge, missingConfig } from '../runtime/guard.js';
 import { adoptSessionFor, recordLibSearch } from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
 import { loadLibrary, searchLibrary } from '../library/library-catalog.js';
-import { atlasAvailable, atlasJson, atlasRepoEntry, atlasRun, atlasVersion } from '../atlas/client.js';
-import { renderInit, type AtlasInitInfo, type HotSpot, type ScanResult } from './init.js';
+import { atlasAvailable, atlasRun } from '../atlas/client.js';
+import { runAtlasCommand } from './atlas.js';
 import { runHook } from '../hooks/index.js';
 import { runMcp } from '../mcp/server.js';
 import { renderGovernance } from './governance.js';
@@ -45,14 +45,27 @@ import { runDoctor } from './doctor.js';
 import { runRedlinesInit } from './redlines.js';
 import { runLayersInit } from './layers-init.js';
 import { runBootstrap } from './bootstrap.js';
+import { runLink } from './link.js';
 import { loadStandards } from '../standards/loader.js';
+import { applyInit, buildPlan, fieldAuditSnapshot, interactiveInit, recommendedChoices, renderPlan, renderSessionReceipt, renderStatus, runCheck, type InitChoices } from '../control/cli.js';
+import type { GateKind } from '../control/project.js';
 
 const HELP = `
 repo-guard —— 仓库体检与影响面工具（零服务端）
 
-  repo-guard init [--write] [--all] 体检；--write 写 repo-facts；--all 一次铺齐全部控制文件
+  repo-guard init                   接入：识别本仓、逐项说明启用的控制并让你确认（终端交互）
+  repo-guard init --yes [--merge-gate husky|lefthook|pre-commit|local]  推荐值直接写入（不碰 pre-commit / CI，除非显式 --merge-gate）
+  repo-guard init --plan [--json]  只看识别结果与选项；--apply '<选择 JSON>' 按选择写入（/repo-guard:init 用）
+  repo-guard init --merge-gate <位置>  以后再加合并门    （多仓：--ws 名 --with 仓路径）
+  repo-guard link [--dir 目录]      把 repo-guard 命令放到终端可用的位置（默认 ~/.local/bin，插件升级后不用重做）
+  repo-guard status                当前生效的控制、档位、来源、合并门、图谱
+  repo-guard receipt               当前会话的改动回执
+  repo-guard check --staged | --base <分支>  合并门：用回执同一套规则检查 diff（红线 block / enforce 档有问题非零退出）
+  repo-guard atlas bind <工具包目录> [--node 路径]  统一绑定 CLI / MCP / Hook
+  repo-guard atlas status          查看实际工具包与版本
+  repo-guard atlas <原生命令…>      调用绑定的 code-atlas（impact / trace / review / viz 等）
   repo-guard scan [--json]         体量与结构体检（转调 atlas scan，退出码透传）
-  repo-guard check <文件…>          改动自查：碰没碰公共层和红线，有问题非零退出
+  repo-guard check <文件…>          改动自查（旧）：碰没碰公共层和符号级红线
   repo-guard lib search <要什么>    UI 组件库里有没有现成的
   repo-guard audit                 红线体检：规则守空气没、有没有后门、证据还准不准
   repo-guard redlines init [--write] 把部门红线模板铺进 .codebuddy/redlines.json
@@ -99,7 +112,7 @@ function err(s: string): void {
 }
 
 /** 带值的选项。解析位置参数时要把它们的值一起跳过 */
-const VALUE_FLAGS = new Set(['--limit', '--stack', '--line-limit', '--repo']);
+const VALUE_FLAGS = new Set(['--limit', '--stack', '--line-limit', '--repo', '--apply', '--merge-gate', '--base', '--ws', '--with']);
 
 function flagNumber(argv: string[], name: string, fallback: number): number {
   const i = argv.indexOf(name);
@@ -129,31 +142,6 @@ function positionals(argv: string[], from: number): string[] {
   return out;
 }
 
-/** init 用的图谱信息：仓不在 atlas 工作区就先 `atlas add`，再取热点与体检 */
-function collectAtlasForInit(repoDir: string, lineLimit: number): AtlasInitInfo {
-  if (!atlasAvailable()) return { available: false, hot: null, scan: null };
-  const version = atlasVersion();
-  let entry = atlasRepoEntry(repoDir, 30_000);
-  let addedMs: number | undefined;
-  if (!entry) {
-    err('本仓还不在 code-atlas 工作区，正在 atlas add 建索引（只这一次，可能要十几秒）…');
-    const t0 = Date.now();
-    const r = atlasRun(['add', repoDir], { cwd: repoDir, timeoutMs: 600_000 });
-    addedMs = Date.now() - t0;
-    if (r.status !== 0) {
-      return { available: true, version, error: `atlas add 失败：${(r.stderr || r.stdout || '').trim().slice(0, 300)}`, hot: null, scan: null };
-    }
-    entry = atlasRepoEntry(repoDir, 30_000);
-    if (!entry) return { available: true, version, error: 'atlas add 之后工作区里仍找不到本仓', hot: null, scan: null };
-  }
-  const base = { available: true, version, workspace: entry.workspace, repoId: entry.id, role: entry.role, stats: entry.stats, addedMs };
-  const opt = { cwd: repoDir, timeoutMs: 300_000 };
-  const hot = atlasJson<{ hot?: HotSpot[] }>(['hot', '--json', '--limit', '200', '--repo', repoDir], opt);
-  if (!hot.ok) return { ...base, error: hot.message, hot: null, scan: null };
-  const sc = atlasJson<ScanResult>(['scan', '--json', '--line-limit', String(lineLimit), '--repo', repoDir], opt);
-  return { ...base, hot: hot.data.hot ?? [], scan: sc.ok ? sc.data : null, error: sc.ok ? undefined : sc.message };
-}
-
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
@@ -162,6 +150,12 @@ async function main(): Promise<number> {
   // 不能被下面任何一行 console 输出污染
   if (cmd === 'hook') return runHook(argv[1] ?? '');
   if (cmd === 'mcp') return runMcp();
+  if (cmd === 'atlas') return runAtlasCommand(argv.slice(1));
+  if (cmd === 'link') {
+    const r = runLink(argv.slice(1));
+    outText(r.text);
+    return r.code;
+  }
 
   if (!cmd || cmd === '-h' || cmd === '--help' || cmd === 'help') {
     outText(HELP);
@@ -174,18 +168,72 @@ async function main(): Promise<number> {
 
   switch (cmd) {
     case 'init': {
-      const facts = readFacts(repoDir);
-      const info = collectAtlasForInit(repoDir, facts?.lineLimit ?? DEFAULT_LINE_LIMIT);
-      const write = argv.includes('--write');
-      const all = argv.includes('--all');
-      const initText = renderInit(repoDir, info, { write }).text;
-      if (!all) {
-        outText(initText);
+      const value = (name: string): string | undefined => {
+        const i = argv.indexOf(name);
+        if (i < 0) return undefined;
+        if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error(name + ' 需要一个值');
+        return argv[i + 1];
+      };
+      const workspace = value('--ws');
+      const withRepos: string[] = [];
+      for (let i = 1; i < argv.length; i++) {
+        if (argv[i] !== '--with') continue;
+        if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error('--with 需要仓库路径');
+        withRepos.push(argv[++i]);
+      }
+      const opts = { workspace, withRepos };
+      const plan = buildPlan(repoDir, opts);
+      const mgRaw = value('--merge-gate');
+      const KINDS: GateKind[] = ['husky', 'lefthook', 'pre-commit', 'ci', 'local'];
+      const mergeGate = mgRaw ? mgRaw.split(',').map((x) => x.trim()) : undefined;
+      if (mergeGate?.some((k) => !KINDS.includes(k as GateKind))) throw new Error('--merge-gate 可选 ' + KINDS.join(' / '));
+
+      if (argv.includes('--plan')) {
+        if (argv.includes('--json')) out(JSON.stringify(plan, null, 2) + '\n');
+        else outText(renderPlan(plan));
         return 0;
       }
-      const extra = runBootstrap(repoDir, write);
-      outText(initText + extra.text);
-      return extra.exitCode;
+      const applyRaw = value('--apply');
+      if (applyRaw !== undefined) {
+        let choices: InitChoices;
+        try {
+          choices = JSON.parse(applyRaw) as InitChoices;
+        } catch {
+          throw new Error('--apply 需要 JSON，如 {"mode":"remind","contract":"auto","verify":["npm run lint"],"publicLayer":[],"redlines":[],"mergeGate":[]}');
+        }
+        outText(applyInit(repoDir, plan, choices, opts));
+        return 0;
+      }
+      let text: string;
+      if (argv.includes('--yes') || argv.includes('--write')) {
+        const c = recommendedChoices(plan);
+        if (mergeGate) c.mergeGate = mergeGate as GateKind[];
+        text = renderPlan(plan) + '\n\n' + applyInit(repoDir, plan, c, opts);
+      } else if (mergeGate) {
+        if (!plan.existing) {
+          err('本仓还没接入（没有 .codebuddy/repo-guard.json）。先运行 repo-guard init，或 repo-guard init --yes --merge-gate ' + mgRaw);
+          return 2;
+        }
+        text = applyInit(repoDir, plan, { mergeGate: mergeGate as GateKind[] }, opts);
+      } else if (process.stdin.isTTY && process.stdout.isTTY) {
+        text = await interactiveInit(repoDir, plan, opts);
+      } else {
+        outText(renderPlan(plan) + '\n\n非交互环境：加 --yes 用推荐值写入（不碰 pre-commit / CI），或用 --plan --json 与 --apply 逐项选择。');
+        return 0;
+      }
+      if (argv.includes('--all')) text += runBootstrap(repoDir, true).text;
+      outText(text);
+      return 0;
+    }
+
+    case 'status': {
+      outText(renderStatus(repoDir));
+      return 0;
+    }
+
+    case 'receipt': {
+      outText(renderSessionReceipt(repoDir));
+      return 0;
     }
 
     case 'scan': {
@@ -207,6 +255,11 @@ async function main(): Promise<number> {
     }
 
     case 'check': {
+      if (argv.includes('--staged') || argv.includes('--base')) {
+        const r = runCheck(repoDir, argv);
+        outText(r.text);
+        return r.code;
+      }
       const files = positionals(argv, 1);
       const facts = readFacts(repoDir);
       const snapshot = loadRedlines(repoDir);
@@ -272,14 +325,20 @@ async function main(): Promise<number> {
     }
 
     case 'audit': {
-      if (!hasRedlines(repoDir)) {
+      // 接入 v2 的仓体检 repo-guard.json 的字段红线；没接入的走旧 redlines.json
+      const v2snap = fieldAuditSnapshot(repoDir);
+      if (v2snap && !v2snap.policy.red_lines.length) {
+        err('本仓 .codebuddy/repo-guard.json 里没有字段红线（redlines.fields）—— 还没有可体检的。');
+        return 2;
+      }
+      if (!v2snap && !hasRedlines(repoDir)) {
         // 这条要走 stderr + 非零：`audit` 是给人和流水线用的，
         // "没有红线可体检"不是成功
         err('本仓没有 .codebuddy/redlines.json —— 还没有红线可体检。');
         err('红线是人写的意图（"外部仍有调用方"这种事静态分析推不出来），要人先写。');
         return 2;
       }
-      const snapshot = loadRedlines(repoDir);
+      const snapshot = v2snap ?? loadRedlines(repoDir);
       const report = auditPolicy(snapshot, repoDir);
       outText(`\n${formatAuditReport(report)}`);
       // 有问题非零：红线腐烂要能卡流水线，否则没人会定期跑。

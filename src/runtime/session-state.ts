@@ -46,6 +46,7 @@ import { readJson, repoId, stateRoot } from './paths.js';
 
 /** 一次 similar 查询留下的参考计划 */
 export interface SimilarPlan {
+  workspace?: string;
   /** repoId —— 计划只对这个仓有效 */
   repo: string;
   /** 资源的家族键（小写单数），如 asset、aimuser */
@@ -103,7 +104,54 @@ interface SessionState {
   evidence: string[];
   /** 已经注入过的 Stop 提醒原因。防死循环：同一 reason 每会话只注入一次 */
   stopNotices: string[];
+  /** v2 任务契约（会话级）。null = 还没声明 */
+  contract: TaskContract | null;
+  /** 扩范围记录：新增了哪些范围、理由 */
+  expansions: ScopeExpansion[];
+  /** guard_note：AI 发现的范围外问题，不改，回执里列给人 */
+  notes: GuardNote[];
+  /** 本会话经写工具改过的文件：`<repoId>:<rel>` → 最后一次写入时间 */
+  writes: Record<string, number>;
+  /** 本会话跑过的命令（验证证据）。只留最近 60 条 */
+  bashRuns: BashRun[];
+  /** 会话开始时各仓的 git 基线（repoId → 提交 + 当时的未跟踪文件），用来发现经 shell 改动的文件 */
+  baselines: Record<string, GitBaseline>;
   updatedAt: number;
+}
+
+export interface GitBaseline {
+  /** git stash create 的提交（工作区干净时为 HEAD） */
+  rev: string;
+  untracked: string[];
+}
+
+export interface TaskContract {
+  goal: string;
+  nonGoals: string[];
+  /** glob，相对仓库根；多仓工作区里也可写「子仓目录/路径」 */
+  scope: string[];
+  verify: string[];
+  /** 声明契约时的会话目录，多仓工作区按它解析「子仓目录/路径」 */
+  cwd: string;
+  ts: number;
+}
+
+export interface ScopeExpansion {
+  added: string[];
+  reason: string;
+  ts: number;
+}
+
+export interface GuardNote {
+  text: string;
+  file?: string;
+  ts: number;
+}
+
+export interface BashRun {
+  cmd: string;
+  ok: boolean;
+  ts: number;
 }
 
 /**
@@ -240,6 +288,12 @@ function emptyState(): SessionState {
     toolCalls: 0,
     evidence: [],
     stopNotices: [],
+    contract: null,
+    expansions: [],
+    notes: [],
+    writes: {},
+    bashRuns: [],
+    baselines: {},
     updatedAt: 0,
   };
 }
@@ -279,6 +333,12 @@ function load(sid: string): SessionState {
     toolCalls: typeof raw.toolCalls === 'number' ? raw.toolCalls : 0,
     evidence: arr(raw.evidence),
     stopNotices: arr(raw.stopNotices),
+    contract: raw.contract && typeof raw.contract === 'object' && Array.isArray(raw.contract.scope) ? raw.contract : null,
+    expansions: Array.isArray(raw.expansions) ? raw.expansions : [],
+    notes: Array.isArray(raw.notes) ? raw.notes : [],
+    writes: counts(raw.writes),
+    bashRuns: Array.isArray(raw.bashRuns) ? raw.bashRuns : [],
+    baselines: raw.baselines && typeof raw.baselines === 'object' ? (raw.baselines as Record<string, GitBaseline>) : {},
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : 0,
   };
 }
@@ -563,6 +623,148 @@ export function claimStopNotice(reason: string): boolean {
   });
 }
 
+// ══════════════════ v2：契约、顺手发现、写入与命令记录、写前快照 ══════════════════
+
+export function getContract(): TaskContract | null {
+  return load(sessionId()).contract;
+}
+
+/** 声明或更新契约。新增范围时必须带理由，记一条扩范围 */
+export function saveContract(c: Omit<TaskContract, 'ts'>, reason: string): { ok: true; added: string[] } | { ok: false; message: string } {
+  return update((st) => {
+    const prev = st.contract;
+    const added = prev ? c.scope.filter((x) => !prev.scope.includes(x)) : [];
+    if (prev && added.length && !reason.trim()) {
+      return { ok: false as const, message: '扩大范围（新增 ' + added.join('、') + '）需要在 reason 里写明理由。' };
+    }
+    if (added.length) st.expansions.push({ added, reason: reason.trim(), ts: Date.now() });
+    st.contract = { ...c, ts: Date.now() };
+    return { ok: true as const, added };
+  });
+}
+
+export function scopeExpansions(): ScopeExpansion[] {
+  return load(sessionId()).expansions;
+}
+
+export function addNote(text: string, file?: string): number {
+  return update((st) => {
+    st.notes.push({ text, ...(file ? { file } : {}), ts: Date.now() });
+    if (st.notes.length > 50) st.notes = st.notes.slice(-50);
+    return st.notes.length;
+  });
+}
+
+export function guardNotes(): GuardNote[] {
+  return load(sessionId()).notes;
+}
+
+export function recordWrite(repoDir: string, rel: string): void {
+  if (!rel) return;
+  update((st) => {
+    st.writes[scopedKey(repoDir, rel)] = Date.now();
+  });
+}
+
+/** 本仓本会话经写工具改过的文件 */
+export function writtenFiles(repoDir: string): string[] {
+  const out: string[] = [];
+  for (const k of Object.keys(load(sessionId()).writes)) {
+    const rel = unscope(repoDir, k);
+    if (rel) out.push(rel);
+  }
+  return out;
+}
+
+/** 本会话（跨仓）写过的不同文件，含仓前缀 */
+export function writtenKeys(): string[] {
+  return Object.keys(load(sessionId()).writes);
+}
+
+export function lastWriteAt(): number {
+  const w = Object.values(load(sessionId()).writes);
+  return w.length ? Math.max(...w) : 0;
+}
+
+export function recordBashRun(cmd: string, ok: boolean): void {
+  update((st) => {
+    st.bashRuns.push({ cmd: cmd.slice(0, 400), ok, ts: Date.now() });
+    if (st.bashRuns.length > 60) st.bashRuns = st.bashRuns.slice(-60);
+  });
+}
+
+export function bashRuns(): BashRun[] {
+  return load(sessionId()).bashRuns;
+}
+
+export function getBaseline(repoDir: string): GitBaseline | null {
+  return load(sessionId()).baselines[repoId(repoDir)] ?? null;
+}
+
+/** 只在本会话第一次记；已有就不动 */
+export function setBaselineOnce(repoDir: string, b: GitBaseline): void {
+  update((st) => {
+    const k = repoId(repoDir);
+    if (!st.baselines[k]) st.baselines[k] = b;
+  });
+}
+
+/** 写前快照：每个文件只在本会话第一次写之前存一份，作为「本次增量」的基线 */
+function preDir(): string {
+  return path.join(stateRoot(), 'state', 'pre', sessionId());
+}
+
+function preFile(repoDir: string, rel: string): string {
+  const key = scopedKey(repoDir, rel);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) h = ((h ^ key.charCodeAt(i)) * 0x01000193) >>> 0;
+  return path.join(preDir(), h.toString(16).padStart(8, '0') + '-' + path.basename(rel).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 40) + '.json');
+}
+
+/** 超过 1MB 的文件不存快照（生成物、数据文件），回执里按「无基线」处理 */
+const PRE_MAX_BYTES = 1024 * 1024;
+
+export function snapshotBefore(repoDir: string, rel: string, abs: string): void {
+  try {
+    const f = preFile(repoDir, rel);
+    if (fs.existsSync(f)) return;
+    let content: string | null = null;
+    let tooBig = false;
+    try {
+      const st = fs.statSync(abs);
+      if (st.isFile()) {
+        if (st.size > PRE_MAX_BYTES) tooBig = true;
+        else content = fs.readFileSync(abs, 'utf-8');
+      }
+    } catch {
+      content = null; // 新文件
+    }
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ rel, content, tooBig }));
+  } catch {
+    /* 快照失败：回执里这个文件按无基线处理 */
+  }
+}
+
+/** 直接存快照内容（经 shell 改的文件：改动前的内容来自 git 基线）。已有快照不覆盖 */
+export function snapshotContent(repoDir: string, rel: string, content: string | null, tooBig = false): void {
+  try {
+    const f = preFile(repoDir, rel);
+    if (fs.existsSync(f)) return;
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ rel, content, tooBig }));
+  } catch {
+    /* 快照失败：回执里按无基线处理 */
+  }
+}
+
+/** 读快照。undefined = 没有快照（不是经写工具改的，或快照失败） */
+export function readBefore(repoDir: string, rel: string): { content: string | null; tooBig: boolean } | undefined {
+  const raw = readJson<{ content?: unknown; tooBig?: unknown }>(preFile(repoDir, rel));
+  if (!raw) return undefined;
+  return { content: typeof raw.content === 'string' ? raw.content : null, tooBig: raw.tooBig === true };
+}
+
 /**
  * 清掉超过 7 天没动的会话状态。
  *
@@ -573,8 +775,18 @@ export function sweepStaleSessions(maxAgeMs = 7 * 86_400_000): void {
   try {
     const dir = path.join(stateRoot(), 'state');
     const now = Date.now();
+    try {
+      const pre = path.join(dir, 'pre');
+      for (const name of fs.readdirSync(pre)) {
+        const d = path.join(pre, name);
+        if (now - fs.statSync(d).mtimeMs > maxAgeMs) fs.rmSync(d, { recursive: true, force: true });
+      }
+    } catch {
+      /* 没有快照目录 */
+    }
     for (const name of fs.readdirSync(dir)) {
       const f = path.join(dir, name);
+      if (name === 'pre' || name === '_current') continue;
       try {
         if (now - fs.statSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f);
       } catch {

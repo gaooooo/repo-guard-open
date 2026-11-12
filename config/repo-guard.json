@@ -1,0 +1,96 @@
+{
+  "_": [
+    "repo-guard 全局层配置（部门改这里定制模板）。项目层是仓库内 .codebuddy/repo-guard.json，由 repo-guard init 生成，结构相同。",
+    "合并规则：项目层写了的字段（含数组）整体覆盖这里，没写的继承。init 会把全部可调字段连同这里的当前值写进项目层，所以这里改默认值只影响之后新接入的仓和项目层缺的字段。",
+    "档位：off 不检查；remind 写后提醒 / 回执列出；enforce 写前拒绝或弹窗。mode 是启发式检查的上限，不约束红线、契约缺失拦截、公共层影响面。",
+    "注释写在 _ 开头的键里，加载时忽略。设计见 docs/DESIGN-v2.md。"
+  ],
+  "mode": "remind",
+  "task": {
+    "_contract": "写代码前是否要先调 guard_task 声明契约。off 不要；auto 写第 2 个文件时要求（拒绝一次）；required 第一次写就要求",
+    "contract": "auto",
+    "_scope": "写到契约范围外时：remind 写后提醒并进回执；enforce 写前弹窗让人确认",
+    "scope": "remind"
+  },
+  "budget": {
+    "_": "只量本次新增的代码：相对任务开始前的文件内容计算，历史代码不算",
+    "addedLines": 300,
+    "newFiles": 5,
+    "funcLines": 60,
+    "nesting": 4,
+    "params": 5
+  },
+  "reuse": {
+    "_beforeNew": "新建文件 / 新增函数时本轮没查过 atlas hot / similar：remind 写后提醒；enforce 新建文件前拒绝，查过才放行",
+    "beforeNew": "remind"
+  },
+  "_publicLayer": "公共层目录前缀（如 src/components/）。改其中已有文件前必须查 atlas impact，否则拒绝。为空则不检查。init 推测、人确认",
+  "publicLayer": [],
+  "verify": {
+    "_commands": "验收命令，init 从 Makefile / package.json / go.mod 推测、人确认。契约里没写验收命令时用这里的",
+    "commands": [],
+    "_onStop": "结束时最后一次写入后没跑过或没跑通验收命令：remind 让 AI 如实说明；enforce 让它先跑通再结束（每会话最多一次）",
+    "onStop": "remind"
+  },
+  "redlines": {
+    "_": "红线不受 mode 约束，按每条的 action 执行：remind 写后提醒 / ask 写前弹窗 / block 写前拒绝（缺省 block）。paths 用 glob（** 跨目录）；commands 用 * 通配，按 && ; | 拆开逐段匹配。项目层写了某类就整体替换这里的同类",
+    "paths": [],
+    "commands": [
+      {
+        "pattern": "git push --force*",
+        "action": "ask",
+        "reason": "强推会覆盖他人提交"
+      },
+      {
+        "pattern": "git push -f*",
+        "action": "ask",
+        "reason": "强推会覆盖他人提交"
+      },
+      {
+        "pattern": "git reset --hard*",
+        "action": "ask",
+        "reason": "会丢掉工作区未提交的改动"
+      },
+      {
+        "pattern": "git clean -f*",
+        "action": "ask",
+        "reason": "会删掉未跟踪文件"
+      }
+    ],
+    "_fields": "字段红线：protects 里的标识符（字段名 / 函数名 / 错误码）在 paths 内的文件里出现次数不许变少（删除或改名）。字段名要人点名，部门层一般留空",
+    "fields": [],
+    "_content": "内容红线：新增的行里不许出现匹配 pattern（JS 正则，flags 可选）的内容。只看新增行，文件里原有的不算",
+    "content": [
+      {
+        "pattern": "AKID[0-9A-Za-z]{16,}",
+        "action": "block",
+        "reason": "腾讯云 SecretId 不得写进代码，请从环境变量或密钥管理服务读取"
+      },
+      {
+        "pattern": "AKIA[0-9A-Z]{16}",
+        "action": "block",
+        "reason": "AWS AccessKey 不得写进代码"
+      },
+      {
+        "pattern": "-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----",
+        "action": "block",
+        "reason": "私钥不得写进代码仓库"
+      },
+      {
+        "pattern": "\\b(?:gh[pousr]_[0-9A-Za-z]{36,}|glpat-[0-9A-Za-z_-]{20,}|xox[baprs]-[0-9A-Za-z-]{10,})\\b",
+        "action": "block",
+        "reason": "平台访问令牌不得写进代码"
+      },
+      {
+        "pattern": "(?<![A-Za-z0-9])(?:secret_?key|secret_?id|access_?key|api_?key|access_?token|client_?secret|password|passwd)[\"']?\\s*[:=]\\s*[\"'](?![^\"']*(?:xxx|your|example|placeholder|changeme|dummy|test|\\*\\*|<|\\$\\{|\\{\\{))(?!/)(?=[^\"']*[0-9])(?=[^\"']*[A-Za-z])[A-Za-z0-9+/=_.-]{12,}[\"']",
+        "flags": "i",
+        "action": "block",
+        "reason": "疑似硬编码凭据：请从环境变量或密钥管理服务读取；确属测试假值请用 example / test 等明显占位"
+      }
+    ]
+  },
+  "baseline": {
+    "_extra": "追加在内置开发基线后的本仓约定，每行一条，建议不超过 5 行",
+    "extra": []
+  }
+}

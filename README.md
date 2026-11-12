@@ -10,25 +10,45 @@
 
 ## 装完之后做什么
 
-### 1. 跑一次体检
+### 1. 接入本仓（v2 开发过程控制）
+
+先让终端能用 `repo-guard` 命令（插件市场安装后插件的 `bin/` 不在 PATH 上）。在 CodeBuddy 会话里执行一次：
 
 ```bash
-repo-guard init
+node "$CODEBUDDY_PLUGIN_ROOT/bin/repo-guard" link   # 或 /repo-guard:init 时按提示执行
 ```
 
-它会告诉你：这个仓是什么技术栈、多少文件超行数上限、有没有循环依赖、检查命令和流水线缺哪几步、以及**推测的公共层目录和推测依据**。
-
-**一个字节都不会写。** 想生成配置再加 `--write`。
-
-### 2. 确认公共层，生成配置
+它在 `~/.local/bin` 放一个启动器，每次运行时自动使用最新安装的 repo-guard，插件升级后不用重做。
 
 ```bash
-repo-guard init --write
+repo-guard init            # 终端交互：识别本仓 → 逐项说明会启用的控制 → 你确认 → 写入
 ```
 
-生成 `.codebuddy/repo-facts.json`（公共层清单、行数上限），并往 `.gitignore` 追加缓存目录。
+或在会话里用 `/repo-guard:init`，由 AI 用提问控件逐项问你。非交互环境用 `repo-guard init --yes`（推荐值，不碰 pre-commit / CI）。
 
-⚠️ **公共层是推测出来的，一定要人过一眼。** 各仓目录约定不一样，猜错要么漏拦、要么天天误伤——后者会让人直接卸载。打开 `repo-facts.json` 改 `publicLayer` 即可。
+init 会告诉你并让你确认：验收命令、公共层、建议红线、要不要把合并门（`repo-guard check --staged`）加进已有的 husky / lefthook / pre-commit 或本机 git hook（**默认不加**；CI 配置不自动改，只给可复制的步骤）。结果写进 `.codebuddy/repo-guard.json`，提交进 git 团队共享。
+
+接入后每次会话自动生效：
+
+| 环节 | 做什么 | 默认 |
+|---|---|---|
+| 开发基线 | 会话开始注入 6 行最简实现约定 | 注入 |
+| 任务契约 | 写第 2 个文件前要求 AI 调 `guard_task` 声明目标 / 不做什么 / 范围 / 验收 | 拒绝一次 |
+| 写时控制 | 越界、新建前没查 atlas、本次新增函数过长过深参数过多、连续失败 | 写后提醒 |
+| 红线 | 受保护路径 / 危险命令按每条的 action（remind / ask / block） | 按规则 |
+| 改动回执 | 结束时列出改了什么、越界、体量、复杂度、查重、噪声、验没验证、顺手发现 | 展示，有问题让 AI 逐条说明 |
+
+```bash
+repo-guard status          # 当前生效的控制、档位、值来自哪一层、合并门、图谱
+repo-guard receipt         # 当前会话的改动回执
+repo-guard check --staged  # 合并门（--base <分支> 给 CI 用）
+```
+
+想收紧时把 `.codebuddy/repo-guard.json` 的 `mode` 改成 `enforce`（先跑一段时间看 `repo-guard governance` 的误伤数据）。完整设计与字段说明见 [`docs/DESIGN-v2.md`](docs/DESIGN-v2.md)。
+
+### 2. 确认公共层
+
+⚠️ **公共层是推测出来的，一定要人过一眼。** 各仓目录约定不一样，猜错要么漏拦、要么天天误伤——后者会让人直接卸载。改 `.codebuddy/repo-guard.json` 的 `publicLayer` 即可（旧的 `repo-facts.json` 会在 init 时迁移过来）。前后端分仓可加 `--with ../backend --ws 项目名`，把相关仓放进同一图谱工作区。
 
 ### 3. （可选）配红线
 
@@ -93,9 +113,13 @@ repo-guard standards audit                     # 体检：有没有守空气、�
 
 | 命令 | 干什么 |
 |---|---|
-| `init [--write]` | 体检 + 生成配置 |
+| `init [--yes \| --plan --json \| --apply <JSON> \| --merge-gate <位置>]` | 接入：识别、告知、确认、写 `.codebuddy/repo-guard.json`；可选加合并门 |
+| `link [--dir 目录]` | 把 `repo-guard` 命令放到终端可用的位置（默认 `~/.local/bin`） |
+| `status` | 当前生效的控制与来源 |
+| `receipt` | 当前会话的改动回执 |
 | `scan` | 体量与结构：超长文件、循环依赖（转调 `atlas scan`）。**有问题非零退出**，可挂 CI |
-| `check <文件…>` | 改动自查：碰没碰公共层和红线 |
+| `check --staged \| --base <分支>` | 合并门：用回执同一套规则检查 diff；红线 block（及 enforce 档的问题）非零退出 |
+| `check <文件…>` | 改动自查：碰没碰公共层和符号级红线 |
 | `lib search <要什么>` | 本仓 UI 组件库里有没有现成的 |
 | `audit` | **红线体检**：规则在不在守空气、paths 有没有后门、evidence 还准不准 |
 | `redlines init [--write]` | 把部门红线模板铺进 `.codebuddy/redlines.json` |
@@ -160,7 +184,7 @@ npm install
 npm run check      # 改完只需要跑这一条
 ```
 
-`npm run check` 按序做四件事，任一失败即停：类型检查 → 打包（含冒烟）→ 58 条钩子回归 → 84 条与旧产物的逐字节比对。
+`npm run check` 依次运行类型检查、构建冒烟、钩子回归、事实初始化和图谱接入专项回归。图谱专项需指定工具包，未找到时会明确 SKIP，不能声称图谱接入已验证。
 
 只跑 `npm run build` 不够 —— 它只保证产物能跑起来，不保证行为没漂。
 
@@ -198,31 +222,71 @@ node bin/verify-hooks.mjs   # 83 条钩子回归，确认填的红线没把正�
 
 ---
 
-## 图谱由 code-atlas 提供
+## 图谱接入：只用 code-atlas 工具包
 
-repo-guard 不再自带图谱引擎。影响面、同类实现、热点、接口契约、体量体检、写后比对、可视化全部由 code-atlas 提供：
+repo-guard 只编排开发过程，不解析代码、不复制图谱算法、不读取 Atlas 内部数据库。影响面、同类/复用、链路、契约、review 和可视化均由 code-atlas 提供。红线/门禁配置不在本轮调整范围。
 
-| 谁用 | 怎么用 |
-|---|---|
-| AI | 插件 `.mcp.json` 同时注册了 `code-atlas` MCP，工具名 `mcp__code-atlas__atlas_impact / atlas_trace / atlas_explore / atlas_reuse / atlas_contracts / atlas_workspace` |
-| 人 | `atlas impact <文件#符号>`、`atlas hot`、`atlas similar`、`atlas trace`、`atlas viz --open` 等 |
-| 钩子 | 子进程调 `atlas … --json --cache-only`（钩子里禁止建图，缓存缺失就放行） |
+### 一次绑定，所有入口使用同一工具包
 
-守卫怎么知道 AI「查过了」：PostToolUse 钩子 `post-atlas` 在 AI 调完 `atlas_impact / atlas_reuse / atlas_trace` 后把查过的文件 / 资源记进会话状态；
-AI 在终端里跑 `atlas impact|similar|hot` 时由 `post-bash` 识别。Stop 时的写后比对调 `atlas conform`。
+本地源码工具包示例（其他开发者换成自己的安装目录）：
 
-- 安装：`npm i -g @tencent/code-atlas`。`repo-guard init` 发现本仓不在 atlas 工作区时会先 `atlas add` 建索引。
-- 没装 atlas：会话开始会明说「图谱相关守卫未生效」；公共层守卫照常拦，但 AI 查不了影响面。
-- 测试或未全局安装时可设 `REPO_GUARD_ATLAS_BIN=<code-atlas>/bin/atlas`。
+~~~bash
+node bin/repo-guard atlas bind /Users/gaoxin/Documents/AI/code-atlas --node /Users/gaoxin/.nvm/versions/node/v22.12.0/bin/node
+node bin/repo-guard atlas status
+~~~
 
-> ⚠️ **影响面为 0 不等于可以删。** 动态 import、样式引用、运行时拼接的路径、SQL、离线任务、其它服务都可能在图谱之外。
+已安装 npm 包时，可用 `repo-guard atlas bind` 自动发现当前 PATH 上的安装并保存绝对路径。绑定保存在本机 `$HOME/.repo-guard/atlas.json`，不进业务仓 Git。显式绑定失效会报错，不偷偷换到 PATH 上另一版本；移动工具包、切换 Node 后重新绑定。
+
+插件 `.mcp.json` 通过 `repo-guard atlas mcp` 启动真正的 Atlas MCP，stdio 透传、不重定义工具。绑定后重开助手会话。若此前单独用过 `atlas install`，请在助手中检查实际 code-atlas MCP 的来源与路径，避免项目/用户/插件注册不同版本；不会自动删已有接入。
+
+### 初始化业务工程
+
+~~~bash
+# 从目标业务仓运行；init 默认预览，不隐式建图
+repo-guard init
+repo-guard init --write --ws myproject --with ../backend
+~~~
+
+- 已登记且缓存有效：由 Atlas 复用；代码或缓存版本变化：由 Atlas 更新。
+- `--with` 可重复，只登记相关仓，不改兄弟仓的治理配置。
+- 本仓只属于一个工作区时自动复用；多个工作区需 `--ws` 明确选择一次，选择保存在本机绑定中。
+- 不自动安装或升级工具包；缺少 Atlas 会明确提示，图谱不可用不等于已经验证。
+
+### 日常使用
+
+| 开发时机 | AI 原生 MCP | 人的统一 CLI |
+|---|---|---|
+| 修改已有代码前 | atlas_impact | repo-guard atlas impact '文件#符号' |
+| 新页面/接口前 | atlas_reuse，kind=similar | repo-guard atlas similar 需求 |
+| 新方法/组件前 | atlas_reuse，kind=reuse | repo-guard atlas hot 需求 |
+| 理解请求链路 | atlas_trace | repo-guard atlas trace 接口名 |
+| 写完、提交前 | atlas_review | repo-guard atlas review --ws myproject |
+| 联调字段 | atlas_contracts，check=true | repo-guard atlas contracts --check |
+| 可视化 | /repo-guard:graph | repo-guard atlas viz --ws myproject --open |
+
+多工作区显式传 `--ws`；trace 在目标工程目录运行，不支持 `--repo`。完整原生参数见 code-atlas 的 docs/USAGE.md。未全局安装 repo-guard 时将命令前缀换成 `node /插件目录/bin/repo-guard`。
+
+### 查询留痕与边界
+
+Atlas 的影响面、链路、热点/复用、同类查询输出机器回执（CLI JSON 的 receipt / MCP 的 structuredContent.receipt）。repo-guard 只消费状态、实际仓/目标和已有参考计划，不靠工具入参或文本猜结果。失败、目标未匹配、歧义、旧版无回执不产生成功查询凭据。trace 不冒充 impact。
+
+统一 CLI 直接记查询回执；MCP 由 post-atlas 记。简单的成功原生 CLI 查询由 post-bash 只读缓存核验；复杂 shell 不作凭据，建议使用统一 CLI。写后 conform 延续既有 Stop 接线，不在本轮重新设计门禁。
+
+图谱查询与缓存由外部包维护。普通查询会检查更新，写前 Hook 不建图。未配置的旧门禁策略保持不变：即使 Atlas 缺失，已有公共层守卫仍可能要求查询；请先完成绑定。
+
+图谱是静态分析，**影响面为 0 不等于可以删除**。review 不替代运行测试，也不保证工作区外调用方安全。
+
+专项回归：
+~~~bash
+REPO_GUARD_ATLAS_BIN=/path/to/code-atlas/bin/atlas node bin/verify-atlas.mjs
+~~~
 
 ---
 
 ## 运行要求
 
-机器上有 Node 18+。引擎已打包进 `bin/repo-guard`（约 840 KB 单文件），**没有任何外部依赖，不装 npm 包、不下载东西、内网可用**。
+机器上有 Node 18+。repo-guard 自身为单文件产物，不需要运行时 npm 依赖；图谱需要完整 code-atlas 工具包、对应 CodeGraph 平台依赖与资源。
 
-只在两处会起子进程，都是可选的：`git`（读 HEAD 做缓存新鲜度判断，没有就退到只看文件 mtime）、`python3`（Python 仓的分析器，没有就只是 Python 仓建不出图）。
+本插件会调用 `git` 与绑定的 code-atlas 子进程；图谱平台依赖和环境检查以 `repo-guard atlas doctor` 为准。
 
-**零出网**：产物里没有 `node:http(s)`、没有 `fetch`、没有任何真实 URL，也不读任何令牌。
+源码分析与图谱存储在本机，不上传源码。code-atlas 交互式命令可能检查版本元数据，完全离线时设置 `ATLAS_NO_UPDATE_CHECK=1`；安装包下载和版本检查不等于图谱服务。

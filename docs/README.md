@@ -18,7 +18,9 @@
 
 分层重构：[`DESIGN-SEVEN-LAYERS.md`](DESIGN-SEVEN-LAYERS.md)（作者目录 `layers/`）。
 
-过程门禁说明：[`PROCESS-GATES.md`](PROCESS-GATES.md)。
+**v2 开发过程控制设计（当前方案）：[`DESIGN-v2.md`](DESIGN-v2.md)**（任务契约 → 写时控制 → 改动回执 → 合并门，单一配置文件）。
+
+旧版 Beta 过程控制方案：[`PROCESS-GATES.md`](PROCESS-GATES.md)（已被 DESIGN-v2 取代，保留备查）。
 
 红线说明：[`REDLINES.md`](REDLINES.md)。
 

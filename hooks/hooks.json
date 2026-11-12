@@ -23,7 +23,6 @@
     "frontmatter 里的 hooks 受 `allowUntrustedFrontmatterHooks` 闸门约束，",
     "默认被拒；插件 hooks.json 不受约束，启用即生效。"
   ],
-
   "hooks": {
     "SessionStart": [
       {
@@ -39,7 +38,6 @@
         ]
       }
     ],
-
     "UserPromptSubmit": [
       {
         "_": "L0 按任务路由（开发前必读）+ 埋点。⚠️ 这个钩子绝不能阻塞——continue:false 会把用户的提问整个吃掉。配置见 capability/task-routes.json，默认不产出内容。",
@@ -53,7 +51,6 @@
         ]
       }
     ],
-
     "PreToolUse": [
       {
         "_": "L1 准入门 · 写工具：公共层已有文件 + 本轮未查影响面 → deny。注意这一条只允许输出 deny 或什么都不输出，往这里挂提醒会让所有正常写文件都产生干预。",
@@ -61,26 +58,25 @@
         "hooks": [
           {
             "type": "command",
-            "description": "公共层写前守卫 + 红线附带提示",
+            "description": "v2 红线 / 契约 / enforce 档范围与复用 + 公共层写前守卫",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook pre-write",
             "timeout": 20
           }
         ]
       },
       {
-        "_": "L1 旁路观测 · Bash：看命令像不像用 shell 写公共层。只提醒不拦 —— 拦 shell 的误伤率高到不可接受（一条命令里可能同时有读和写、路径可能是变量拼的）。",
+        "_": "Bash 写前：v2 命令红线（ask / block）+ 工程校验证据 + 旧循环门。shell 写公共层的提醒挪到了 PostToolUse —— 写前没有「只提醒」的输出，allow 会绕过用户对命令的权限确认。",
         "matcher": "Bash|execute_command",
         "hooks": [
           {
             "type": "command",
-            "description": "shell 旁路写公共层提醒 + 计数",
+            "description": "v2 命令红线 + 工程校验证据",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook pre-bash",
             "timeout": 15
           }
         ]
       }
     ],
-
     "PostToolUse": [
       {
         "_": "L3 循环门计数：记 (工具名, 入参指纹) 的重复次数与连续成功。指纹只取路径/命令，不含内容——含内容的话模型改一个字就成了新调用，计数永远到不了阈值。计数**不受开关控制**：关着时也要能回答「如果开了会拦多少次」。",
@@ -88,27 +84,27 @@
         "hooks": [
           {
             "type": "command",
-            "description": "超长文件提醒 + L3 计数器",
+            "description": "v2 写后提醒（范围 / 复用 / 复杂度 / 红线 / 连续失败）+ 超长文件提醒 + L3 计数器",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-write",
             "timeout": 15
           }
         ]
       },
       {
-        "_": "L3 循环门计数（Bash）：命令成功才能清掉连续失败计数；非零退出宿主走 PostToolUse 而不是 PostToolUseFailure。只更新计数器，不输出任何东西。",
+        "_": "Bash 执行后：L3 计数（命令成功才能清掉连续失败计数；非零退出宿主走 PostToolUse 而不是 PostToolUseFailure）、v2 验证证据（命令 + 退出码）、shell 写公共层与命令红线 remind 的写后提醒。",
         "matcher": "Bash|execute_command",
         "hooks": [
           {
             "type": "command",
-            "description": "L3 计数器（命令）+ 识别终端里的 atlas impact/similar/hot",
+            "description": "L3 计数器（命令）+ 验证证据 + shell 写公共层提醒 + 识别终端里的 atlas impact/similar/hot",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-bash",
             "timeout": 15
           }
         ]
       },
       {
-        "_": "图谱查询留痕：AI 调了 code-atlas 的 atlas_impact / atlas_reuse / atlas_trace 之后，把「查过哪个文件 / 查过同类实现 / 查过热点」记进会话状态 —— 写前守卫放行的依据。图谱由 code-atlas 的 MCP 提供，repo-guard 看不到它的进程内部，只能在这里记。钩子里禁止建图：需要向 atlas 要数据时一律 --cache-only，失败放行。只写状态，不输出任何东西。",
-        "matcher": "mcp__code-atlas__atlas_impact|mcp__code-atlas__atlas_reuse|mcp__code-atlas__atlas_trace",
+        "_": "图谱查询留痕（工具名两套都要写：插件内注册的 MCP 工具名是 mcp__plugin_repo_guard_code_atlas__*——宿主把插件名、服务名里的连字符转成下划线，matcher 不做等价；单独 atlas install 装的 MCP 才是 mcp__code-atlas__*）：消费 code-atlas MCP 的 structuredContent.receipt，记录成功解析的实际仓/文件或同类计划。失败、未匹配、歧义和无回执不记成功。trace 只留痕，不代替 impact。MCP 由统一绑定启动；这里不解析图谱、不二次查询或建图，只写状态。",
+        "matcher": "mcp__plugin_repo_guard_code_atlas__atlas_impact|mcp__plugin_repo_guard_code_atlas__atlas_reuse|mcp__plugin_repo_guard_code_atlas__atlas_trace|mcp__code-atlas__atlas_impact|mcp__code-atlas__atlas_reuse|mcp__code-atlas__atlas_trace",
         "hooks": [
           {
             "type": "command",
@@ -117,9 +113,20 @@
             "timeout": 20
           }
         ]
+      },
+      {
+        "_": "延迟加载的 MCP 工具（宿主默认对 MCP 工具延迟加载）经 DeferExecuteTool 代理调用，钩子看到的工具名是 DeferExecuteTool。post-atlas 从入参取真实工具名，只处理 code-atlas 的查询，其余直接返回；拿不到 structuredContent 时只读缓存再查一次取回执。",
+        "matcher": "DeferExecuteTool",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "记录经 DeferExecuteTool 调用的 atlas 图谱查询",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-atlas",
+            "timeout": 20
+          }
+        ]
       }
     ],
-
     "PostToolUseFailure": [
       {
         "_": "L3 循环门：连续失败计数（阈值 3）、同文件写失败计数（阈值 2）。只更新计数器，不输出任何东西。配置见 process/loop.json。",
@@ -133,21 +140,18 @@
         ]
       }
     ],
-
     "PermissionRequest": [
       {
         "_": "待补充 · L6 留痕：宿主弹权限框时记一笔，用于回答『这个仓有多少操作需要人确认』。纯观测。",
         "hooks": []
       }
     ],
-
     "PermissionDenied": [
       {
         "_": "待补充 · 被 auto 模式分类器拒绝时。返回 {retry:true} 可告知模型该操作值得换个方式重试；这里更可能只做留痕，因为分类器的判断优先于插件。",
         "hooks": []
       }
     ],
-
     "SessionEnd": [
       {
         "_": "L4 诚实信号（近似）+ L6 留痕收尾 + 清理过期会话状态。近似的意思是：插件看不到 finalReason、看不到子 agent 抛异常，能算的只有工具调用数/失败数/有没有写操作/有没有跑过校验。埋点里标了 approximate:true，不要当成 deerclaw 那套四态。",
@@ -162,42 +166,44 @@
         ]
       }
     ],
-
     "Stop": [
       {
         "_": "L5 交付门 + L3 迭代预算摘要。⚠️ 两条硬约束：① 默认只提醒不拦——agent 在用户的工作树上干活，git commit 是人随时会敲的动作，在这里硬拦会直接妨碍人；真要硬拦该在宿主的 permissions 里写 ask。② 用 continue:false 时同一 reason 每会话只注入一次——宿主**没有实现** loop_limit（内部市场有插件在用，CodeBuddy 会静默忽略），不去重会无限续跑。",
         "hooks": [
           {
             "type": "command",
-            "description": "交付校验提醒（默认关）+ 长会话迭代摘要",
+            "description": "v2 改动回执 + 交付校验提醒（旧门禁，默认关）+ 长会话迭代摘要",
             "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook stop",
-            "timeout": 20
+            "timeout": 30
           }
         ]
       }
     ],
-
     "StopFailure": [
       {
         "_": "待补充 · L4 诚实信号：轮次因 API 错误结束。输出与退出码被宿主忽略，所以这里只能留痕。",
         "hooks": []
       }
     ],
-
     "SubagentStart": [
       {
-        "_": "待补充 · 子代理起。插件 agent 的 frontmatter 不支持 hooks，所以子代理侧的注入只能从这里做。",
-        "hooks": []
+        "_": "v2：子代理启动时注入开发基线与任务契约。插件 agent 的 frontmatter 不支持 hooks，所以子代理侧的注入只能从这里做。只在接入了 v2 的仓（有 .codebuddy/repo-guard.json）上有输出。",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "注入开发基线与任务契约",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook subagent-start",
+            "timeout": 15
+          }
+        ]
       }
     ],
-
     "SubagentStop": [
       {
         "_": "待补充 · L4 诚实信号（子代理侧）。可用 continue:false 让子代理继续，同 Stop 的死循环约束。",
         "hooks": []
       }
     ],
-
     "PreCompact": [
       {
         "_": "待补充 · 压缩前。退出码 2 可阻止压缩。一般不该阻止 —— 压缩是宿主的上下文管理手段，插件掺和只会打架。这里更可能只是把公共层清单标记为『压缩后需重注入』。",
@@ -205,7 +211,6 @@
         "hooks": []
       }
     ],
-
     "PostCompact": [
       {
         "_": "L0 重注入。压缩会把 SessionStart 注入的公共层清单冲掉，不补回去的话长会话后半程模型就不知道哪些目录是公共层了——而守卫还在拦，于是它会觉得工具行为随机。",
@@ -219,14 +224,12 @@
         ]
       }
     ],
-
     "InstructionsLoaded": [
       {
         "_": "待补充 · 观测 CODEBUDDY.md / .codebuddy/rules/ 加载了哪些。用于回答『init 建议写的仓库规则，人到底写了没』。",
         "hooks": []
       }
     ],
-
     "FileChanged": [
       {
         "_": "待补充 · matcher 填要监视的文件名。打算监视 .codebuddy/repo-facts.json 与 redlines.json —— 人改完配置立刻重注入，省掉『改完要重开会话』这一步。",
@@ -234,49 +237,42 @@
         "hooks": []
       }
     ],
-
     "ConfigChange": [
       {
         "_": "待补充 · 会话期间配置变更。与 FileChanged 的区别是它管的是宿主的 settings.json。",
         "hooks": []
       }
     ],
-
     "CwdChanged": [
       {
         "_": "待补充 · AI 执行了 cd。要紧的是：换了目录可能就换了仓库，公共层清单与图谱缓存都得跟着换。当前实现每次都从 hook 输入的 cwd 重新定位仓库根，所以不接这个事件也是正确的 —— 接它只是为了省掉重复定位。",
         "hooks": []
       }
     ],
-
     "TaskCreated": [
       {
         "_": "待补充 · L6 留痕：任务粒度的聚合维度。有了它才能回答『这一个任务里拦了几次』而不只是『这一个会话里』。",
         "hooks": []
       }
     ],
-
     "TaskCompleted": [
       {
         "_": "待补充 · 同 TaskCreated。也是 L5 交付门更合适的挂点之一（任务完成比会话结束更接近『交付』的语义）。",
         "hooks": []
       }
     ],
-
     "WorktreeCreate": [
       {
         "_": "待补充 · 新工作树不在 code-atlas 工作区里。可以在这里后台 atlas add 预热，但注意：建索引耗时可能几十秒，不能阻塞。",
         "hooks": []
       }
     ],
-
     "WorktreeRemove": [
       {
         "_": "待补充 · 清理该工作树对应的会话状态。不做也不漏 —— 状态有 7 天过期。",
         "hooks": []
       }
     ],
-
     "Notification": [
       {
         "_": "待补充 · 权限请求 / 60 秒空闲提醒。这个插件不做桌面通知，留位。",
@@ -284,28 +280,24 @@
         "hooks": []
       }
     ],
-
     "TeammateIdle": [
       {
         "_": "待补充 · 团队成员即将空闲。repo-guard 是单 agent 场景，这个事件用不上，列出来是为了标明『知道它存在、有意不用』。",
         "hooks": []
       }
     ],
-
     "Elicitation": [
       {
         "_": "待补充 · MCP 服务器请求用户输入之前。repo-guard 自己的 MCP 不做 elicitation，留位。",
         "hooks": []
       }
     ],
-
     "ElicitationResult": [
       {
         "_": "待补充 · 用户响应 elicitation 之后、回传服务器之前。可改写响应。",
         "hooks": []
       }
     ],
-
     "Setup": [
       {
         "_": "待补充 · 插件安装/启用时跑一次。⚠️ 这个事件**不在官方文档的事件清单里**，但宿主实现里有，内部市场的 bugbot 用它装 CLI。repo-guard 自身已打包进 bin/；图谱依赖的 code-atlas 需用户自行 npm i -g @tencent/code-atlas（SessionStart 会提示），所以留空。将来若要做『首次启用时自动跑一次 init（只报告不写）』，挂这里。",

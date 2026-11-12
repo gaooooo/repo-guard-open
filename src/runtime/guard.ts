@@ -101,9 +101,9 @@ export function denyReason(v: FileVerdict): string {
   const lines = [
     `\`${v.rel}\` 在本项目的公共层里，改它之前必须先确认影响面。`,
     '按下面任一种方式查（三个是同一个能力，挑能用的那个）：',
-    `  · MCP 工具：mcp__code-atlas__atlas_impact，参数 target="${v.rel}"（只改某个方法时写 "${v.rel}#方法名"）`,
+    `  · MCP 工具：atlas_impact（插件内全名 mcp__plugin_repo_guard_code_atlas__atlas_impact，单独安装时为 mcp__code-atlas__atlas_impact），参数 target="${v.rel}"（只改某个方法时写 "${v.rel}#方法名"）`,
     `  · 斜杠命令：/repo-guard:impact ${v.rel}`,
-    `  · 命令行：atlas impact ${v.rel}（需已安装 code-atlas：npm i -g @tencent/code-atlas）`,
+    `  · 命令行：repo-guard atlas impact ${v.rel}（CLI、MCP 与 Hook 使用同一工具绑定）`,
     '拿到受影响的入口数再决定改法 —— 被 5 个以上入口引用时只允许新增可选参数，不得改已有签名。',
     '**不要用代码搜索代替它。** grep 看不见动态引用、样式引用和跨服务调用，' +
       '拿搜索结果当影响面会得出"没人用，可以删"这种错误结论。',

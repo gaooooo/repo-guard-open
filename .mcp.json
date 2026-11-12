@@ -5,8 +5,8 @@
       "args": ["${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard", "mcp"]
     },
     "code-atlas": {
-      "command": "atlas",
-      "args": ["mcp"]
+      "command": "node",
+      "args": ["${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard", "atlas", "mcp"]
     }
   }
 }

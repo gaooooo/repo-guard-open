@@ -1,5 +1,5 @@
 # 图谱
 
-介绍见 [`docs/GRAPH.md`](../../docs/GRAPH.md)。源码位置见 [`docs/GRAPH-SPLIT.md`](../../docs/GRAPH-SPLIT.md)。
+本层引用外部 code-atlas 工具包，不实现图谱算法。接入、初始化和开发者调用见 [docs/GRAPH.md](../../docs/GRAPH.md)。
 
-引擎由 code-atlas 提供（atlas CLI + MCP），不在本仓。hook 里禁止建图（只用 `atlas --cache-only`）。
+开发者通过 `repo-guard atlas bind` 一次绑定；`repo-guard init --write` 准备本仓图谱，已安装/已建图则复用。CLI、MCP、Hook 使用同一绑定，查询回执由 Atlas 产生。红线和门禁策略本轮不改。

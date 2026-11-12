@@ -50,12 +50,13 @@ import {
   sweepStaleSessions,
 } from '../runtime/session-state.js';
 import { record } from '../runtime/metrics.js';
-import { loadGuardConfig, type GuardConfig } from '../gates/config.js';
+import { defaultConfig, loadGuardConfig, type GuardConfig } from '../gates/config.js';
+import * as v2 from '../control/hooks.js';
 import { buildInjection, featureHint, matchTaskRoutes } from '../gates/inject.js';
 import { judgeRedline, judgeScope, noteTouched, type WriteToolInput } from '../gates/admission.js';
 import { judgeGraphEnforce } from '../gates/graph-enforce.js';
 import { atlasAvailable, atlasJson } from '../atlas/client.js';
-import { trackAtlasBash, trackAtlasTool } from './atlas-track.js';
+import { ATLAS_MCP_PREFIX, trackAtlasBash, trackAtlasTool } from './atlas-track.js';
 import { judgeLoop, iterationNote, noteToolResult } from '../gates/loop.js';
 import { isDeliveryAction, judgeDelivery, noteEvidence, recordFinalSignal } from '../gates/delivery.js';
 import { loadHumanReview, redlineShouldAsk } from '../layers/human-review.js';
@@ -132,28 +133,27 @@ function emitContext(event: string, text: string): void {
 }
 
 /**
- * 放行但带提醒。
+ * 注入上下文 + 只给人看的一行（systemMessage 不进模型上下文）。两者都空就不输出。
  *
- * 同时给 `additionalContext`（进上下文，模型看得见）和
- * `permissionDecision: allow` + 同样的 reason（进权限层的说明）。
- * 两个都给是因为不同宿主版本读的字段不一样，而这条提醒漏掉了就等于没提醒。
+ * 没有「放行但带提醒」的写前输出：PreToolUse 的 allow 会绕过用户的权限确认，
+ * 提醒一律放到写后（PostToolUse）。
  */
-function emitAllowWithNote(event: string, text: string): void {
+function emitOut(event: string, context: string, system: string): void {
+  if (!context && !system) return;
   process.stdout.write(
     JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: event,
-        additionalContext: text,
-        permissionDecision: 'allow',
-        permissionDecisionReason: text,
-      },
+      ...(system ? { systemMessage: system } : {}),
+      ...(context ? { hookSpecificOutput: { hookEventName: event, additionalContext: context } } : {}),
     }),
   );
 }
 
-/** Stop / SubagentStop：阻止停止并让 Agent 继续 */
-function emitContinue(reason: string): void {
-  process.stdout.write(JSON.stringify({ continue: false, reason }));
+/**
+ * 本仓用哪份旧门禁配置。接入 v2（有 .codebuddy/repo-guard.json）的仓不再读 .codebuddy/guard/：
+ * 过程控制由 v2 统一负责，两套同时开会互相打架。
+ */
+function guardCfg(repoDir: string): GuardConfig {
+  return v2.v2Active(repoDir) ? defaultConfig() : loadGuardConfig(repoDir);
 }
 
 /** 从 tool_input 里抠出被写的路径。不同宿主 / 不同工具字段名不一样 */
@@ -271,16 +271,28 @@ function sessionStart(input: HookInput): void {
     : '图谱相关守卫未生效：没找到 code-atlas（atlas 命令）。请安装 code-atlas（npm i -g @tencent/code-atlas）后重开会话；在此之前查不了影响面 / 同类实现。';
 
   const repos = reposOf(input);
+  // v2：开发基线 + 契约；init 后第一个会话告诉开发者启用了什么。各仓相同的基线只注一次
+  const v2Parts: string[] = [];
+  const system: string[] = [];
+  for (const r of repos) {
+    if (!v2.v2Active(r)) continue;
+    v2.ensureBaseline(r);
+    const t = v2.injectionFor(r);
+    if (t && !v2Parts.includes(t)) v2Parts.push(t);
+    const a = v2.announceOnce(r, repos.length > 1 ? repoLabel(input, r) : '');
+    if (a) system.push(a);
+  }
   if (repos.length === 1) {
-    const all = [startSection(repos[0], atlasNote)].filter(Boolean).join('\n\n');
-    if (all) emitContext('SessionStart', all);
+    const all = [startSection(repos[0], atlasNote), ...v2Parts].filter(Boolean).join('\n\n');
+    emitOut('SessionStart', all, system.join('\n'));
     return;
   }
   // 多仓工作区：逐仓注入，atlas 提示只说一次
   const parts = [multiRepoHead(input, repos)];
   for (const r of repos) parts.push(`### ${repoLabel(input, r)}\n${startSection(r, '')}`);
   if (atlasNote) parts.push(atlasNote);
-  emitContext('SessionStart', parts.join('\n\n'));
+  parts.push(...v2Parts);
+  emitOut('SessionStart', parts.join('\n\n'), system.join('\n'));
 }
 
 function multiRepoHead(input: HookInput, repos: string[]): string {
@@ -304,7 +316,9 @@ function startSection(repoDir: string, atlasNote: string): string {
 
   // guard 配置不存在时 buildInjection 只产出公共层那一段，
   // 与接入 L0 之前的输出逐字节相同 —— 铁律 ④
-  const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
+  // 接入 v2 但没配公共层：不注入「公共层（未配置）」这段，开发基线由 v2 注入
+  if (v2.v2Active(repoDir) && !facts.publicLayer.length) return [atlasNote, std].filter(Boolean).join('\n\n');
+  const text = buildInjection(facts, loadRedlines(repoDir), guardCfg(repoDir));
   const factNote = '工程事实长文见仓库根 CODEBUDDY.md（本段只注机器摘要）。';
   return [text, factNote, atlasNote, std].filter(Boolean).join('\n\n');
 }
@@ -318,11 +332,11 @@ function startSection(repoDir: string, atlasNote: string): string {
 function postCompact(input: HookInput): void {
   const repos = reposOf(input);
   if (repos.length === 1) {
-    const all = compactSection(repos[0]);
+    const all = [compactSection(repos[0]), v2.v2Active(repos[0]) ? v2.injectionFor(repos[0]) : ''].filter(Boolean).join('\n\n');
     if (all) emitContext('PostCompact', `（上下文压缩后重新注入）\n${all}`);
     return;
   }
-  const parts = repos.map((r) => [r, compactSection(r)] as const).filter(([, t]) => t);
+  const parts = repos.map((r) => [r, [compactSection(r), v2.v2Active(r) ? v2.injectionFor(r) : ''].filter(Boolean).join('\n\n')] as const).filter(([, t]) => t);
   if (!parts.length) return;
   emitContext(
     'PostCompact',
@@ -333,9 +347,20 @@ function postCompact(input: HookInput): void {
 function compactSection(repoDir: string): string {
   const facts = readFacts(repoDir);
   const std = injectSegment(standardsOf(repoDir, facts), 'post_compact');
-  if (!facts) return std;
-  const text = buildInjection(facts, loadRedlines(repoDir), loadGuardConfig(repoDir));
+  if (!facts || (v2.v2Active(repoDir) && !facts.publicLayer.length)) return std;
+  const text = buildInjection(facts, loadRedlines(repoDir), guardCfg(repoDir));
   return [text, std].filter(Boolean).join('\n\n');
+}
+
+/** 子代理启动：插件 agent 的 frontmatter 不支持 hooks，子代理侧的基线与契约只能从这里注入 */
+function subagentStart(input: HookInput): void {
+  const parts: string[] = [];
+  for (const r of reposOf(input)) {
+    if (!v2.v2Active(r)) continue;
+    const t = v2.injectionFor(r);
+    if (t && !parts.includes(t)) parts.push(t);
+  }
+  if (parts.length) emitContext('SubagentStart', parts.join('\n\n'));
 }
 
 /**
@@ -352,7 +377,7 @@ function userPromptSubmit(input: HookInput): void {
     if (t && !parts.includes(t)) parts.push(t);
   };
   for (const repoDir of reposOf(input)) {
-    const cfg = loadGuardConfig(repoDir);
+    const cfg = guardCfg(repoDir);
     push(matchTaskRoutes(cfg, prompt));
     push(promptSegment(standardsOf(repoDir, readFacts(repoDir)), prompt));
     const hint = featureHint(cfg, prompt);
@@ -360,6 +385,7 @@ function userPromptSubmit(input: HookInput): void {
       push(hint);
       record('feature_hint', repoDir);
     }
+    if (v2.v2Active(repoDir)) push(v2.promptLine());
   }
 
   if (parts.length) emitContext('UserPromptSubmit', parts.join('\n\n'));
@@ -385,7 +411,7 @@ function preWrite(input: HookInput): void {
   if (!target) return; // 不在任何仓里：不管（T2 用例）
   const { repoDir, abs } = target;
   const facts = readFacts(repoDir);
-  const cfg = loadGuardConfig(repoDir);
+  const cfg = guardCfg(repoDir);
   const std = standardsOf(repoDir, facts);
   const stdRules = compileBlockRules(std);
 
@@ -395,6 +421,16 @@ function preWrite(input: HookInput): void {
 
   const rel = toRepoRelative(repoDir, abs);
   if (!rel) return; // 仓库外：不管（T2 用例）
+
+  // ⓪ v2：红线、契约缺失、enforce 档的范围与复用（只在接入了 v2 的仓上）
+  if (v2.v2Active(repoDir)) {
+    const d = v2.preWrite(repoDir, rel, abs, input.tool_input ?? {});
+    if (d) {
+      if (d.kind === 'ask') emitAsk('PreToolUse', d.reason);
+      else emitDeny('PreToolUse', d.reason);
+      return;
+    }
+  }
 
   // ① L3 循环门
   const loop = judgeLoop(repoDir, cfg, input.tool_name ?? 'Write', input.tool_input, rel);
@@ -499,10 +535,10 @@ const SHELL_WRITE_PATTERNS: RegExp[] = [
 ];
 
 /**
- * Bash 之前：看命令像不像在用 shell 写公共层；顺带收集工程校验证据。
+ * Bash 之前：v2 命令红线（ask / block）、收集工程校验证据、L3 循环门（旧门禁）。
  *
- * **只提醒，不拦。** 拦 shell 的误伤率高得不可接受 —— 一条命令里可能同时有
- * 读和写、路径可能是变量拼出来的、也可能压根不是本仓的路径。
+ * shell 写公共层的提醒在执行**之后**（post-bash）给：PreToolUse 没有「只提醒」的输出，
+ * 用 allow 带说明会绕过用户对这条命令的权限确认。
  */
 function preBash(input: HookInput): void {
   const cmd = input.tool_input?.command;
@@ -511,21 +547,31 @@ function preBash(input: HookInput): void {
   const cwd = bashCwd(input, cmd);
   const repos = sessionRepos(cwd);
 
+  const red = v2.preBash(repos, cmd);
+  if (red) {
+    if (red.kind === 'ask') emitAsk('PreToolUse', red.reason);
+    else emitDeny('PreToolUse', red.reason);
+    return;
+  }
+
   // 工程校验证据要在**执行之前**就记下 —— PostToolUse 拿不到命令原文
-  for (const repoDir of repos) noteEvidence(loadGuardConfig(repoDir), cmd);
+  for (const repoDir of repos) noteEvidence(guardCfg(repoDir), cmd);
 
   // L3 循环门也管 bash：同一条命令重复跑 3 次基本都是卡住了。只在配了 repo-facts 的仓上判
   for (const repoDir of repos) {
     if (!readFacts(repoDir)) continue;
-    const loop = judgeLoop(repoDir, loadGuardConfig(repoDir), 'Bash', input.tool_input, null);
+    const loop = judgeLoop(repoDir, guardCfg(repoDir), 'Bash', input.tool_input, null);
     if (loop.blocked) {
       record('loop_deny', repoDir, { detail: loop.kind });
       emitDeny('PreToolUse', loop.reason!);
       return;
     }
   }
+}
 
-  if (!SHELL_WRITE_PATTERNS.some((re) => re.test(cmd))) return;
+/** shell 写公共层：命令执行后提醒。返回空串 = 不提醒 */
+function shellBypassNote(input: HookInput, cmd: string, cwd: string, repos: string[]): string {
+  if (!SHELL_WRITE_PATTERNS.some((re) => re.test(cmd))) return '';
 
   // 命令里的每个路径各自找所在仓、各按各的公共层判
   const hits = new Map<string, Set<string>>();
@@ -544,7 +590,7 @@ function preBash(input: HookInput): void {
       hits.get(repoDir)!.add(p);
     }
   }
-  if (!hits.size) return;
+  if (!hits.size) return '';
 
   const multi = hits.size > 1 || repos.length > 1;
   const shown: string[] = [];
@@ -552,10 +598,9 @@ function preBash(input: HookInput): void {
     record('shell_bypass_warn', repoDir, { detail: [...ps].join(',') });
     for (const p of ps) shown.push(multi ? `${repoLabel(input, repoDir)}/${p}` : p);
   }
-  emitAllowWithNote(
-    'PreToolUse',
-    `注意：这条命令看起来会用 shell 写入公共层（${shown.join('、')}）。` +
-      '绕开文件工具不会触发影响面检查 —— 如果确实要改公共层文件，请先查影响面。',
+  return (
+    `注意：刚才这条命令看起来用 shell 写入了公共层（${shown.join('、')}）。` +
+    '绕开文件工具不会触发影响面检查 —— 如果确实改了公共层文件，请先查影响面再继续，必要时撤回。'
   );
 }
 
@@ -571,15 +616,17 @@ function postWrite(input: HookInput): void {
   const raw = writeTarget(input);
   const target = raw ? fileTarget(input, raw) : null;
   const repoDir = target?.repoDir ?? repoOf(input);
-  const cfg = loadGuardConfig(repoDir);
+  const cfg = guardCfg(repoDir);
   const rel = target ? toRepoRelative(repoDir, target.abs) : null;
 
-  noteToolResult(repoDir, cfg, input.tool_name ?? 'Write', input.tool_input, rel, toolSucceeded(input));
+  const ok = toolSucceeded(input);
+  noteToolResult(repoDir, cfg, input.tool_name ?? 'Write', input.tool_input, rel, ok);
 
   const facts = readFacts(repoDir);
   if (!rel) return;
 
   const notes: string[] = [];
+  if (target && v2.v2Active(repoDir)) notes.push(...v2.postWrite(repoDir, rel, target.abs, ok));
 
   // ① 超行数上限。依赖 repo-facts，没配就跳过
   //
@@ -635,9 +682,19 @@ function postBash(input: HookInput): void {
   const cwd = bashCwd(input, cmd);
   // 循环计数是会话级的（按工具名 + 命令指纹），repoDir 只决定读哪份配置、埋点记到哪：取命令所在的第一个仓
   const repoDir = sessionRepos(cwd)[0];
-  noteToolResult(repoDir, loadGuardConfig(repoDir), input.tool_name ?? 'Bash', input.tool_input, null, toolSucceeded(input));
-  // AI 在终端里跑了 atlas impact / similar / hot：和调 MCP 一样算「查过」
-  if (/\batlas\s+(impact|similar|hot)\b/.test(cmd)) trackAtlasBash(cwd, cmd);
+  const ok = toolSucceeded(input);
+  noteToolResult(repoDir, guardCfg(repoDir), input.tool_name ?? 'Bash', input.tool_input, null, ok);
+  if (!cmd.trim()) return;
+  const repos = sessionRepos(cwd);
+  const notes = [shellBypassNote(input, cmd, cwd, repos), ...v2.postBash(repos, cmd, ok)].filter(Boolean);
+  // AI 在终端里跑了 atlas impact / similar / hot：和调 MCP 一样算「查过」。
+  // atlas 绑定失效时这里会抛错，放在验证证据与提醒之后，不能把它们一起吞掉
+  try {
+    if (ok) trackAtlasBash(cwd, cmd);
+  } catch {
+    /* 图谱不可用：不影响其余 */
+  }
+  if (notes.length) emitContext('PostToolUse', notes.join('\n\n'));
 }
 
 /**
@@ -646,9 +703,16 @@ function postBash(input: HookInput): void {
  * 只写状态与埋点，不输出任何东西。
  */
 function postAtlas(input: HookInput): void {
-  const name = input.tool_name ?? '';
-  if (!name.startsWith('mcp__code-atlas__')) return;
-  trackAtlasTool(cwdOf(input), name, (input.tool_input ?? {}) as Record<string, unknown>);
+  let name = input.tool_name ?? '';
+  let args = (input.tool_input ?? {}) as Record<string, unknown>;
+  // 延迟加载的 MCP 工具由 DeferExecuteTool 代理：真实工具名与参数在入参里
+  if (name === 'DeferExecuteTool') {
+    name = String(args.toolName ?? args.tool_name ?? '');
+    const inner = args.params ?? args.tool_args ?? args.arguments;
+    args = inner && typeof inner === 'object' ? (inner as Record<string, unknown>) : {};
+  }
+  if (!ATLAS_MCP_PREFIX.test(name)) return;
+  trackAtlasTool(cwdOf(input), name, args, input.tool_response);
 }
 
 function postFail(input: HookInput): void {
@@ -656,7 +720,9 @@ function postFail(input: HookInput): void {
   const target = raw ? fileTarget(input, raw) : null;
   const repoDir = target?.repoDir ?? repoOf(input);
   const rel = target ? toRepoRelative(repoDir, target.abs) : null;
-  noteToolResult(repoDir, loadGuardConfig(repoDir), input.tool_name ?? 'unknown', input.tool_input, rel, false);
+  noteToolResult(repoDir, guardCfg(repoDir), input.tool_name ?? 'unknown', input.tool_input, rel, false);
+  const notes = v2.postFail(repoDir, rel);
+  if (notes.length) emitContext('PostToolUseFailure', notes.join('\n\n'));
 }
 
 // ══════════════════ L5 交付门 / L4 诚实信号 ══════════════════
@@ -697,13 +763,17 @@ async function conformNote(repoDir: string): Promise<{ text: string; drift: bool
   const tmp = path.join(os.tmpdir(), `repo-guard-plans-${process.pid}-${Date.now()}.json`);
   let results: AtlasConformResult[] = [];
   try {
-    fs.writeFileSync(tmp, JSON.stringify(plans.map(({ ts: _ts, repo: _repo, ...p }) => p)));
-    const r = atlasJson<{ results?: AtlasConformResult[] }>(['conform', '--plan', tmp, ...touched, '--json', '--repo', repoDir], {
-      cwd: repoDir,
-      timeoutMs: CONFORM_TIMEOUT_MS,
-    });
-    if (!r.ok) return none;
-    results = Array.isArray(r.data.results) ? r.data.results : [];
+    const deadline = Date.now() + CONFORM_TIMEOUT_MS;
+    for (const workspace of new Set(plans.map((p) => p.workspace))) {
+      const budget = deadline - Date.now();
+      if (budget <= 0) break;
+      const group = plans.filter((p) => p.workspace === workspace);
+      fs.writeFileSync(tmp, JSON.stringify(group.map(({ ts: _ts, repo: _repo, ...p }) => p)));
+      const r = atlasJson<{ results?: AtlasConformResult[] }>(['conform', '--plan', tmp, ...touched, '--json', '--repo', repoDir, ...(workspace ? ['--ws', workspace] : [])], {
+        cwd: repoDir, timeoutMs: budget,
+      });
+      if (r.ok && Array.isArray(r.data.results)) results.push(...r.data.results);
+    }
   } finally {
     try {
       fs.unlinkSync(tmp);
@@ -753,7 +823,7 @@ async function stop(input: HookInput): Promise<void> {
     if (t && !arr.includes(t)) arr.push(t);
   };
   for (const repoDir of reposOf(input)) {
-    const cfg = loadGuardConfig(repoDir);
+    const cfg = guardCfg(repoDir);
     let conf = { text: '', drift: false };
     try {
       conf = await conformNote(repoDir);
@@ -768,20 +838,30 @@ async function stop(input: HookInput): Promise<void> {
     push(notes, iterationNote(cfg));
   }
 
+  // v2 改动回执：systemMessage 给人看；有待说明项时续跑一次给模型
+  let receipt: v2.StopResult = { system: [], cont: [] };
+  try {
+    receipt = v2.stop(reposOf(input), (r) => repoLabel(input, r));
+  } catch {
+    /* 回执失败不能影响收尾 */
+  }
+  const system = receipt.system.join('\n\n');
+
   // 写后比对有偏差：阻止停止，让 AI 照参考改（或说明为什么不照）。只放 additionalContext 的话，
   // 宿主在 Stop 上不会再给模型一轮，结论就只落在埋点里、代码不会变
-  if (blockNotes.length || drift) {
-    emitContinue([...blockNotes, ...confTexts].join('\n\n'));
+  if (blockNotes.length || drift || receipt.cont.length) {
+    const reason = [...blockNotes, ...confTexts, ...receipt.cont].join('\n\n');
+    process.stdout.write(JSON.stringify({ continue: false, reason, ...(system ? { systemMessage: system } : {}) }));
     return;
   }
 
   const all = [...notes, ...confTexts];
-  if (all.length) emitContext('Stop', all.join('\n\n'));
+  emitOut('Stop', all.join('\n\n'), system);
 }
 
 function sessionEnd(input: HookInput): void {
   for (const repoDir of reposOf(input)) {
-    recordFinalSignal(loadGuardConfig(repoDir), repoDir);
+    recordFinalSignal(guardCfg(repoDir), repoDir);
     record('session_end', repoDir);
   }
   // 会话状态是一次性的，顺手清掉过期的。失败无所谓
@@ -826,6 +906,9 @@ export async function runHook(name: string): Promise<number> {
         break;
       case 'post-compact':
         postCompact(input);
+        break;
+      case 'subagent-start':
+        subagentStart(input);
         break;
       case 'stop':
         await stop(input);
