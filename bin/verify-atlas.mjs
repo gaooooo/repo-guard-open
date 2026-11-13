@@ -85,6 +85,46 @@ try {
   ok(hook('pre-write', input, 'mcp-receipt') === null, '有效回执应满足查询手续');
   hook('post-atlas', { tool_name: 'mcp__code-atlas__atlas_impact', tool_input: { target: 'src/utils/format.ts' }, tool_response: { ...result, isError: true } }, 'failed');
   ok(hook('pre-write', input, 'failed').hookSpecificOutput.permissionDecision === 'deny', '失败不能产生成功查询凭据');
+
+  // IDE 的 MCP 代理使用 serverName/toolName + JSON 字符串 arguments，cwd 可能是 /。
+  const reuseArgs = { kind: 'reuse', intent: 'formatMoney number', repo: 'frontend', workspace: 'team', scope: 'repo' };
+  const reuseResult = mcp('tools/call', { name: 'atlas_reuse', arguments: reuseArgs });
+  const proxy = { tool_name: 'mcp_call_tool', tool_input: { serverName: 'repo-guard/repo-guard/code-atlas', toolName: 'atlas_reuse', arguments: JSON.stringify(reuseArgs) }, tool_response: reuseResult };
+  hook('post-atlas', proxy, 'ide-reuse-object');
+  ok(JSON.parse(fs.readFileSync(path.join(home, '.repo-guard/state/ide-reuse-object.json'))).hotRepos.length === 1, 'IDE JSON 字符串参数应记录成功复用回执');
+  hook('post-atlas', { ...proxy, cwd: '/', tool_response: JSON.stringify(reuseResult.content) }, 'ide-reuse-flat');
+  const hotState = JSON.parse(fs.readFileSync(path.join(home, '.repo-guard/state/ide-reuse-flat.json')));
+  ok(hotState.hotRepos.length === 1, 'IDE 文本响应、cwd=/ 时从真实进程工作区只读缓存补回执');
+  const newFile = 'src/pages/ide-reuse-probe.ts';
+  hook('pre-write', { cwd: '/', tool_name: 'Write', tool_input: { filePath: newFile, content: 'export function ideProbe() { return 1; }\n' } }, 'ide-reuse-flat');
+  write(frontend, newFile, 'export function ideProbe() { return 1; }\n');
+  const post = hook('post-write', { cwd: '/', tool_name: 'Write', tool_input: { filePath: newFile }, tool_response: { success: true } }, 'ide-reuse-flat');
+  ok(!JSON.stringify(post).includes('本轮还没查过'), 'IDE 成功查复用后新增函数不再误报未查询');
+
+  for (const [label, change] of [
+    ['other-server', { tool_input: { ...proxy.tool_input, serverName: 'unrelated/code-atlas' } }],
+    ['other-tool', { tool_input: { ...proxy.tool_input, toolName: 'atlas_review' } }],
+    ['bad-json', { tool_input: { ...proxy.tool_input, arguments: '{bad' } }],
+    ['array-json', { tool_input: { ...proxy.tool_input, arguments: '[]' } }],
+    ['null-json', { tool_input: { ...proxy.tool_input, arguments: 'null' } }],
+    ['failed-object', { tool_response: { ...reuseResult, isError: true } }],
+    ['failed-text', { tool_response: 'Error calling tool: query failed' }],
+    ['cancelled-text', { tool_response: 'User rejected this command.' }],
+  ]) {
+    const sid = 'ide-no-receipt-' + label;
+    hook('post-atlas', { ...proxy, ...change }, sid);
+    const file = path.join(home, '.repo-guard/state/' + sid + '.json');
+    ok(!fs.existsSync(file) || JSON.parse(fs.readFileSync(file)).hotRepos.length === 0, 'IDE ' + label + ' 不能留下成功复用凭据');
+  }
+  hook('post-atlas', { ...proxy, tool_input: { ...proxy.tool_input, arguments: reuseArgs } }, 'ide-reuse-args-object');
+  ok(JSON.parse(fs.readFileSync(path.join(home, '.repo-guard/state/ide-reuse-args-object.json'))).hotRepos.length === 1, 'IDE 对象 arguments 同样支持');
+  hook('post-atlas', { ...proxy, tool_input: { ...proxy.tool_input, serverName: 'code-atlas' } }, 'ide-standalone-atlas');
+  ok(JSON.parse(fs.readFileSync(path.join(home, '.repo-guard/state/ide-standalone-atlas.json'))).hotRepos.length === 1, '独立安装 code-atlas 的 IDE 服务可记账');
+  hook('post-atlas', { tool_name: 'mcp_call_tool', cwd: '/', tool_input: { serverName: proxy.tool_input.serverName, toolName: 'atlas_impact', arguments: JSON.stringify({ target: 'src/utils/format.ts#formatMoney', workspace: 'team' }) }, tool_response: JSON.stringify(result.content) }, 'ide-impact');
+  ok(hook('pre-write', { ...input, cwd: '/' }, 'ide-impact') === null, 'IDE 代理 impact 成功后能满足公共层守卫');
+  const hj = JSON.parse(fs.readFileSync(path.join(here, '../hooks/hooks.json')));
+  ok(hj.hooks.PostToolUse.some((h) => new RegExp(h.matcher || '$^').test('mcp_call_tool') && h.hooks.some((c) => c.command.includes('hook post-atlas'))), 'IDE MCP 代理必须实际注册到 post-atlas matcher');
+
   const missing = mcp('tools/call', { name: 'atlas_impact', arguments: { target: 'notARealSymbol', workspace: 'team' } });
   ok(missing.structuredContent.receipt.status === 'not_found', '未匹配目标不能伪装成成功');
   const bad = mcp('tools/call', { name: 'atlas_impact', arguments: { target: 'x', workspace: 'missing' } });

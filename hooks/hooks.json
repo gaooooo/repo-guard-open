@@ -125,6 +125,18 @@
             "timeout": 20
           }
         ]
+      },
+      {
+        "_": "IDE 的 MCP 工具经 mcp_call_tool 转发：只处理已确认的 code-atlas 服务，arguments 可为 JSON 字符串；失败不留成功凭据，缺结构化回执时只读同一 Atlas 缓存。",
+        "matcher": "mcp_call_tool",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "记录 IDE mcp_call_tool 转发的 Atlas 查询",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/bin/repo-guard\" hook post-atlas",
+            "timeout": 20
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [

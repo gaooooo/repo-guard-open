@@ -42,7 +42,7 @@ function cli(cwd, args, extra = {}) {
   return spawnSync(process.execPath, [TOOL, ...args], { cwd, encoding: 'utf-8', env: { ...ENV, ...extra } });
 }
 function hook(cwd, name, input) {
-  const r = spawnSync(process.execPath, [TOOL, 'hook', name], { input: JSON.stringify({ cwd, ...input }), encoding: 'utf-8', env: ENV });
+  const r = spawnSync(process.execPath, [TOOL, 'hook', name], { cwd, input: JSON.stringify({ cwd, ...input }), encoding: 'utf-8', env: ENV });
   const out = (r.stdout || '').trim();
   if (!out) return { verdict: 'allow', text: '', system: '' };
   const j = JSON.parse(out);
@@ -312,6 +312,116 @@ add('F13', 'status 列出字段 / 内容红线', /字段 \d+ 条、内容 5 条/
   hook(hd, 'pre-write', { session_id: 'debt', tool_name: 'Edit', tool_input: { file_path: 'a.go' } });
   w(hd, 'a.go', 'package a\n\nfunc Big() {\n' + '\tprintln(1)\n'.repeat(75) + '}\n');
   add('D1', '改动前已超行数阈值的函数再变长 → 不提醒（历史债）', hook(hd, 'post-write', { session_id: 'debt', tool_name: 'Edit', tool_input: { file_path: 'a.go' } }).verdict === 'allow');
+}
+
+// ⑫ IDE 3.10.0：工具名归一为 Write / Edit，参数仍是 filePath / old_str / new_str
+{
+  const ide = mkrepo('ide', {
+    'package.json': JSON.stringify({ name: 'ide-fixture', scripts: {} }),
+    'src/components/Existing.ts': 'export const existing = 1;\n',
+    'src/components/Other.ts': 'export const other = 1;\n',
+    'src/views/fields.ts': 'export const tenant_id = 1;\nexport const value = 1;\n',
+    'src/views/legacy.ts': 'export const legacy = "AKID0000000000000000";\nexport const value = 1;\n',
+    'src/views/a.ts': 'export const a = 1;\n',
+    'src/views/b.ts': 'export const b = 1;\n',
+  });
+  cli(ide, ['init', '--yes']);
+  const cf = path.join(ide, '.codebuddy/repo-guard.json');
+  const c = JSON.parse(fs.readFileSync(cf, 'utf-8'));
+  c.publicLayer = ['src/components/'];
+  c.task.contract = 'off';
+  c.redlines.fields = [{ protects: ['tenant_id'], paths: ['src/views/fields.ts'], action: 'block' }];
+  fs.writeFileSync(cf, JSON.stringify(c));
+
+  for (const [i, tool] of ['write_to_file', 'Write'].entries()) {
+    const r = hook(ide, 'pre-write', { session_id: 'ide-content-' + i, tool_name: tool, tool_input: { filePath: path.join(ide, 'src/views/content.ts'), content: 'export const probeValue = "AKID0000000000000000";\n' } });
+    add('IDE-C' + i, tool + '：filePath 全量写入命中内容红线', r.verdict === 'deny' && /SecretId/.test(r.text), r.text);
+  }
+  for (const [i, tool] of ['replace_in_file', 'Edit'].entries()) {
+    const r = hook(ide, 'pre-write', { session_id: 'ide-field-' + i, tool_name: tool, tool_input: { filePath: 'src/views/fields.ts', old_str: 'tenant_id', new_str: '' } });
+    add('IDE-F' + i, tool + '：filePath / old_str / 空 new_str 删除受保护字段被拦', r.verdict === 'deny' && /tenant_id/.test(r.text), r.text);
+  }
+  const batch = hook(ide, 'pre-write', { session_id: 'ide-batch', tool_name: 'MultiEdit', tool_input: { filePath: 'src/views/fields.ts', edits: [
+    { old_str: 'tenant_id', new_str: 'renamed' },
+    { old_string: 'value = 1', new_string: 'value = 2' },
+  ] } });
+  add('IDE-F2', '批量 edits 混合 IDE / CLI 字段同样判定红线', batch.verdict === 'deny' && /tenant_id/.test(batch.text), batch.text);
+  const editContent = hook(ide, 'pre-write', { session_id: 'ide-edit-content', tool_name: 'Edit', tool_input: { filePath: 'src/views/a.ts', old_str: 'export const a = 1;', new_str: 'export const a = "AKID0000000000000000";' } });
+  add('IDE-C2', 'IDE 增量替换新增凭据样本被拦', editContent.verdict === 'deny' && /SecretId/.test(editContent.text), editContent.text);
+  add('IDE-N1', 'IDE 正常替换保留受保护字段，不误拦', hook(ide, 'pre-write', { session_id: 'ide-safe', tool_name: 'Edit', tool_input: { filePath: 'src/views/fields.ts', old_str: 'value = 1', new_str: 'value = 2' } }).verdict === 'allow');
+  add('IDE-N2', 'IDE 编辑不把原有凭据当本次新增内容', hook(ide, 'pre-write', { session_id: 'ide-legacy', tool_name: 'Edit', tool_input: { filePath: 'src/views/legacy.ts', old_str: 'value = 1', new_str: 'value = 2' } }).verdict === 'allow');
+  add('IDE-N3', '参数同时有 CLI / IDE 字段时保留 CLI 字段优先级', hook(ide, 'pre-write', { session_id: 'ide-priority', tool_name: 'Edit', tool_input: { file_path: 'src/views/fields.ts', filePath: 'src/components/Existing.ts', old_string: 'value = 1', new_string: 'value = 2', old_str: 'tenant_id', new_str: '' } }).verdict === 'allow');
+  add('IDE-N4', 'IDE 非字符串路径按坏输入放行、不崩溃', hook(ide, 'pre-write', { session_id: 'ide-invalid', tool_name: 'Write', tool_input: { filePath: {}, content: 'x' } }).verdict === 'allow');
+
+  for (const [i, tool] of ['replace_in_file', 'Edit'].entries()) {
+    add('IDE-P' + i, tool + '：未查影响面时 filePath 公共层写前拒绝', hook(ide, 'pre-write', { session_id: 'ide-public', tool_name: tool, tool_input: { filePath: path.join(ide, 'src/components/Existing.ts'), old_str: 'existing = 1', new_str: 'existing = 2' } }).verdict === 'deny');
+  }
+  hook(ide, 'post-atlas', { session_id: 'ide-public', tool_name: 'mcp__plugin_repo_guard_code_atlas__atlas_impact', tool_response: { structuredContent: { receipt: { schemaVersion: 1, kind: 'impact', status: 'ok', workspace: 'fixture', repos: [{ id: 'ide', path: ide }], targets: [{ repo: 'ide', file: 'src/components/Existing.ts' }] } } } });
+  add('IDE-P2', '成功 impact 回执后 IDE 同一公共层文件放行', hook(ide, 'pre-write', { session_id: 'ide-public', tool_name: 'Edit', tool_input: { filePath: 'src/components/Existing.ts' } }).verdict === 'allow');
+  add('IDE-P3', 'impact 查询不放行其他 IDE 公共层文件', hook(ide, 'pre-write', { session_id: 'ide-public', tool_name: 'Edit', tool_input: { filePath: 'src/components/Other.ts' } }).verdict === 'deny');
+
+  c.task.contract = 'auto';
+  fs.writeFileSync(cf, JSON.stringify(c));
+  const first = hook(ide, 'pre-write', { session_id: 'ide-contract', tool_name: 'Write', tool_input: { filePath: 'src/views/first.ts', content: 'export const first = 1;\n' } });
+  w(ide, 'src/views/first.ts', 'export const first = 1;\n');
+  hook(ide, 'post-write', { session_id: 'ide-contract', tool_name: 'Write', tool_input: { filePath: 'src/views/first.ts' }, tool_response: { success: true } });
+  const second = hook(ide, 'pre-write', { session_id: 'ide-contract', tool_name: 'Write', tool_input: { filePath: 'src/views/second.ts', content: 'export const second = 2;\n' } });
+  add('IDE-T1', 'IDE 写后记录第一个文件，第二个文件缺契约拒绝', first.verdict === 'allow' && second.verdict === 'deny' && /guard_task/.test(second.text), second.text);
+
+  mcp(ide, 'ide-scope', 'guard_task', { goal: 'IDE 范围回归', scope: ['src/views/a.ts'] });
+  const before = hook(ide, 'pre-write', { session_id: 'ide-scope', tool_name: 'Edit', tool_input: { filePath: 'src/views/b.ts', old_str: 'b = 1', new_str: 'b = 2' } });
+  w(ide, 'src/views/b.ts', 'export const b = 2;\n');
+  const after = hook(ide, 'post-write', { session_id: 'ide-scope', tool_name: 'Edit', tool_input: { filePath: 'src/views/b.ts' }, tool_response: { success: true } });
+  add('IDE-T2', 'remind 档 IDE 越界写前不拦、写后提醒', before.verdict === 'allow' && after.verdict === 'context' && /不在本次任务契约范围/.test(after.text), after.text);
+  const receipt = hook(ide, 'stop', { session_id: 'ide-scope' });
+  add('IDE-T3', 'IDE 写前快照与写后记录进入回执，增量和越界可见', /改了 1 个文件/.test(receipt.system) && /越界 1 个/.test(receipt.system) && /新增 1 行 \/ 删除 1 行/.test(receipt.system) && !/无基线/.test(receipt.system), receipt.system);
+
+  hook(ide, 'post-fail', { session_id: 'ide-fail', tool_name: 'Edit', tool_input: { filePath: 'src/views/a.ts' } });
+  const failed = hook(ide, 'post-fail', { session_id: 'ide-fail', tool_name: 'Write', tool_input: { filePath: 'src/views/a.ts' } });
+  add('IDE-L1', 'IDE PostToolUseFailure 按同文件累计失败并提醒', /src\/views\/a.ts/.test(failed.text) && /写失败 2 次/.test(failed.text), failed.text);
+  hook(ide, 'post-write', { session_id: 'ide-fingerprint', tool_name: 'Edit', tool_input: { filePath: 'src/views/a.ts' }, tool_response: { success: false } });
+  hook(ide, 'post-write', { session_id: 'ide-fingerprint', tool_name: 'Edit', tool_input: { filePath: 'src/views/b.ts' }, tool_response: { success: false } });
+  const state = JSON.parse(fs.readFileSync(path.join(HOME, '.repo-guard/state/ide-fingerprint.json'), 'utf-8'));
+  add('IDE-L2', 'IDE 循环指纹包含 filePath，不把不同文件当同一调用', state.failStreak?.n === 1 && state.failStreak.key.includes('filePath=src/views/b.ts'), JSON.stringify(state.failStreak));
+}
+
+// ⑬ IDE 根目录占位不应丢失验收证据；自动修复脚本不作为 init 默认验收。
+{
+  const v = mkrepo('ide-verify', {
+    'package.json': JSON.stringify({ name: 'lint-fixture', scripts: { lint: 'eslint --fix src', typecheck: 'tsc --noEmit', test: 'echo "Error: no test specified" && exit 1' } }),
+    'src/probe.ts': 'export const probe = 1;\n',
+  });
+  const plan = JSON.parse(cli(v, ['init', '--plan', '--json']).stdout);
+  add('IDE-V1', 'init 检测 lint --fix：展示写入风险且默认不勾选', plan.verify.some((c) => c.value === 'npm run lint' && !c.checked && /会写文件/.test(c.why)), JSON.stringify(plan.verify));
+  cli(v, ['init', '--yes']);
+  const p = path.join(v, '.codebuddy/repo-guard.json');
+  const c = JSON.parse(fs.readFileSync(p));
+  add('IDE-V2', 'init --yes 不把自动修复命令写成默认验收，保留只读 typecheck', !c.verify.commands.includes('npm run lint') && c.verify.commands.includes('npm run typecheck'), JSON.stringify(c.verify));
+  c.verify.commands = ['node -e "process.exit(0)"'];
+  c.redlines.commands.push({ pattern: 'npm run lint*', action: 'block', reason: '脚本含 --fix，只运行单文件只读检查' });
+  fs.writeFileSync(p, JSON.stringify(c));
+  for (const cmd of ['npm run lint', 'npm run lint:style', 'git status && npm run lint']) {
+    const h = hook(v, 'pre-bash', { cwd: '/', session_id: 'ide-lint-block', tool_name: 'Bash', tool_input: { command: cmd } });
+    add('IDE-V3-' + cmd, 'IDE cwd=/：项目命令红线拦自动修复脚本 ' + cmd, h.verdict === 'deny' && /只运行单文件/.test(h.text), h.text);
+  }
+  for (const [sid, code] of [['ide-verify-pass', 0], ['ide-verify-fail', 1]]) {
+    hook(v, 'pre-write', { cwd: '/', session_id: sid, tool_name: 'Edit', tool_input: { filePath: path.join(v, 'src/probe.ts') } });
+    hook(v, 'post-write', { cwd: '/', session_id: sid, tool_name: 'Edit', tool_input: { filePath: path.join(v, 'src/probe.ts') } });
+    const cmd = c.verify.commands[0];
+    const pre = hook(v, 'pre-bash', { cwd: '/', session_id: sid, tool_name: 'Bash', tool_input: { command: cmd } });
+    hook(v, 'post-bash', { cwd: '/', session_id: sid, tool_name: 'Bash', tool_input: { command: cmd }, tool_response: { type: 'execute_command_result', stdout: '', stderr: '', exitCode: code } });
+    const st = JSON.parse(fs.readFileSync(path.join(HOME, '.repo-guard/state/' + sid + '.json')));
+    const rc = cli(v, ['receipt'], { CODEBUDDY_SESSION_ID: sid }).stdout;
+    add('IDE-V4-' + code, 'IDE cwd=/：验收退出码 ' + code + ' 准确记录为' + (code === 0 ? '通过' : '未跑通'), pre.verdict === 'allow' && st.bashRuns.length === 1 && st.bashRuns[0].ok === (code === 0) && (code === 0 ? /通过（在最后一次写入之后）/.test(rc) : /最后一次没跑通/.test(rc)), rc);
+    hook(v, 'post-write', { cwd: '/', session_id: sid, tool_name: 'Edit', tool_input: { filePath: path.join(v, 'src/probe.ts') } });
+    add('IDE-V5-' + code, 'IDE 验收后又写入则旧证据失效（退出码 ' + code + '）', /未验证/.test(cli(v, ['receipt'], { CODEBUDDY_SESSION_ID: sid }).stdout));
+  }
+  w(v, 'package.json', JSON.stringify({ scripts: { lint: 'eslint src', prelint: 'prettier --write src' } }));
+  const hooksPlan = JSON.parse(cli(v, ['init', '--plan', '--json']).stdout);
+  add('IDE-V6', 'init 同样发现 prelint 自动写入，不默认勾选', hooksPlan.verify.some((c) => c.value === 'npm run lint' && !c.checked), JSON.stringify(hooksPlan.verify));
+  w(v, 'package.json', JSON.stringify({ scripts: { lint: 'eslint --fix-dry-run src' } }));
+  const dry = JSON.parse(cli(v, ['init', '--plan', '--json']).stdout);
+  add('IDE-V7', 'init 不把 --fix-dry-run 当实际写入', dry.verify.some((c) => c.value === 'npm run lint' && c.checked), JSON.stringify(dry.verify));
 }
 
 // ───────────── 报告 ─────────────

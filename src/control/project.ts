@@ -96,7 +96,9 @@ export function guessVerifyCommands(repoDir: string): Candidate[] {
     const body = scripts[name];
     if (!body) continue;
     if (name === 'test' && /no test specified/.test(body)) continue;
-    add(run + ' ' + name, '来自 package.json 的 scripts.' + name);
+    const autoFix = [scripts['pre' + name], body, scripts['post' + name]]
+      .some((s) => typeof s === 'string' && /(?:^|\s)--(?:fix|write)(?=\s|=|$)/.test(s));
+    add(run + ' ' + name, '来自 package.json 的 scripts.' + name + (autoFix ? '（含自动修复，会写文件；默认不选，请改用只读检查）' : ''), !autoFix);
   }
   const make = read(repoDir, 'Makefile');
   const targets = new Set([...make.matchAll(/^([A-Za-z][\w-]*)\s*:/gm)].map((m) => m[1]));

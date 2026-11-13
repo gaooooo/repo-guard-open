@@ -80,7 +80,7 @@ interface HookInput {
   prompt?: string;
   tool_input?: WriteToolInput & { command?: string; [k: string]: unknown };
   /** PostToolUse 的工具返回。用于判定成功/失败 */
-  tool_response?: { success?: boolean; error?: unknown; [k: string]: unknown };
+  tool_response?: { success?: boolean; error?: unknown; [k: string]: unknown } | string;
   [k: string]: unknown;
 }
 
@@ -160,7 +160,7 @@ function guardCfg(repoDir: string): GuardConfig {
 function writeTarget(input: HookInput): string | null {
   const ti = input.tool_input;
   if (!ti) return null;
-  for (const key of ['file_path', 'notebook_path', 'path', 'target_file'] as const) {
+  for (const key of ['file_path', 'notebook_path', 'path', 'target_file', 'filePath'] as const) {
     const v = ti[key];
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
@@ -168,7 +168,9 @@ function writeTarget(input: HookInput): string | null {
 }
 
 function cwdOf(input: HookInput): string {
-  return input.cwd && input.cwd.trim() ? input.cwd : process.cwd();
+  const cwd = input.cwd?.trim();
+  // IDE 3.10 会把事件 cwd 填成 /，但钩子进程已在真实工作区启动。
+  return cwd && cwd !== path.parse(cwd).root ? cwd : process.cwd();
 }
 
 /** cwd 所在的仓。多仓工作区（cwd 是父目录）时就是父目录本身，只用于会话绑定与兜底 */
@@ -705,14 +707,24 @@ function postBash(input: HookInput): void {
 function postAtlas(input: HookInput): void {
   let name = input.tool_name ?? '';
   let args = (input.tool_input ?? {}) as Record<string, unknown>;
-  // 延迟加载的 MCP 工具由 DeferExecuteTool 代理：真实工具名与参数在入参里
-  if (name === 'DeferExecuteTool') {
+  // CLI / IDE 的 MCP 代理保留不同的工具名，IDE arguments 可能是 JSON 字符串。
+  if (name === 'DeferExecuteTool' || name === 'mcp_call_tool') {
+    const ide = name === 'mcp_call_tool';
+    if (ide && !['repo-guard/repo-guard/code-atlas', 'code-atlas'].includes(String(args.serverName))) return;
     name = String(args.toolName ?? args.tool_name ?? '');
-    const inner = args.params ?? args.tool_args ?? args.arguments;
-    args = inner && typeof inner === 'object' ? (inner as Record<string, unknown>) : {};
+    if (ide) name = 'mcp__code-atlas__' + name;
+    let inner = args.params ?? args.tool_args ?? args.arguments;
+    if (typeof inner === 'string') {
+      try { inner = JSON.parse(inner); } catch { return; }
+    }
+    if (!inner || typeof inner !== 'object' || Array.isArray(inner)) return;
+    args = inner as Record<string, unknown>;
   }
   if (!ATLAS_MCP_PREFIX.test(name)) return;
-  trackAtlasTool(cwdOf(input), name, args, input.tool_response);
+  // IDE 把 MCP 输出展平成文本；失败文本不能用缓存补成成功查询。
+  if (typeof input.tool_response === 'string' && /^(?:Error calling tool:|User rejected)/.test(input.tool_response.trim())) return;
+  const response = input.tool_response && typeof input.tool_response === 'object' ? input.tool_response : undefined;
+  trackAtlasTool(cwdOf(input), name, args, response);
 }
 
 function postFail(input: HookInput): void {

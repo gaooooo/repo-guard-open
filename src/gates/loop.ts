@@ -48,7 +48,7 @@ import type { GuardConfig } from './config.js';
 export function fingerprint(toolInput: Record<string, unknown> | undefined): string {
   if (!toolInput) return '';
   const parts: string[] = [];
-  for (const k of ['file_path', 'notebook_path', 'path', 'target_file', 'command', 'urlPath', 'file'] as const) {
+  for (const k of ['file_path', 'notebook_path', 'path', 'target_file', 'filePath', 'command', 'urlPath', 'file'] as const) {
     const v = toolInput[k];
     if (typeof v === 'string' && v.trim()) parts.push(`${k}=${v.trim()}`);
   }

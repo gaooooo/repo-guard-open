@@ -37,11 +37,15 @@ export interface WriteToolInput {
   notebook_path?: string;
   path?: string;
   target_file?: string;
+  filePath?: string;
   /** Write / write_to_file：全量内容 */
   content?: string;
   /** Edit / replace_in_file：增量替换 */
   old_string?: string;
   new_string?: string;
+  /** IDE 保留的原始替换参数（工具名可已归一为 Edit） */
+  old_str?: string;
+  new_str?: string;
   replace_all?: boolean;
   /** MultiEdit / multi_replace：一组替换 */
   edits?: unknown;
@@ -60,12 +64,12 @@ function asEdits(input: WriteToolInput): OneEdit[] {
     if (typeof o !== 'string' || typeof n !== 'string') return;
     out.push({ oldString: o, newString: n, replaceAll: all === true });
   };
-  push(input.old_string, input.new_string, input.replace_all);
+  push(input.old_string ?? input.old_str, input.new_string ?? input.new_str, input.replace_all);
   if (Array.isArray(input.edits)) {
     for (const raw of input.edits) {
       if (!raw || typeof raw !== 'object') continue;
       const e = raw as Record<string, unknown>;
-      push(e.old_string, e.new_string, e.replace_all);
+      push(e.old_string ?? e.old_str, e.new_string ?? e.new_str, e.replace_all);
     }
   }
   return out;
